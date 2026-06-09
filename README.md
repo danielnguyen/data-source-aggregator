@@ -8,11 +8,23 @@ It is not a memory service. It does not write to external systems, call an LLM, 
 
 1. Create a virtual environment.
 2. Install the project with dev dependencies: `pip install -e .[dev]`
-3. Copy a source template to a non-example filename and edit it:
-   `cp config/sources/jeep_wj_maintenance.example.yaml config/sources/jeep_wj_maintenance.yaml`
+3. Copy any source template you want to enable to a non-example filename.
 4. Copy `config/credentials.yaml.example` to `config/credentials.yaml` only if an enabled source references a `credentials_ref`.
-5. Copy `.env.example` to `.env` only if you want service-level overrides.
-6. Start the service with `uvicorn app.main:app --reload`
+5. Create `secrets/` and `var/audit/` as needed for local runtime files.
+6. Copy `.env.example` to `.env` only if you want service-level overrides for non-Docker runs.
+7. Start the service with `uvicorn app.main:app --reload`
+
+## Docker Compose
+
+Use Docker Compose for local or server deployment:
+
+```bash
+docker compose up --build
+```
+
+The included compose file mounts source configs, credential config, secrets, and audit logs instead of baking them into the image.
+
+See [docs/deployment.md](/home/danielnguyen/projects/danielnguyen/data-source-aggregator/docs/deployment.md) for the mounted layout and [docs/smoke-tests.md](/home/danielnguyen/projects/danielnguyen/data-source-aggregator/docs/smoke-tests.md) for a quick verification flow.
 
 ## Configuration model
 
@@ -49,6 +61,8 @@ Do not use `.env` as the primary place for source IDs, URLs, tokens, or private 
 These are intentionally gitignored.
 
 By default the service loads source configs from `config/sources` and credentials from `config/credentials.yaml`. You can override those with `SOURCE_CONFIG_DIR` and `CREDENTIALS_CONFIG_PATH`. The service also loads a local `.env` file on startup for service-level overrides.
+
+The Docker image is intended to receive these files through mounts. Local `config/credentials.yaml`, `.env`, `secrets/`, and `var/` are excluded from image build context.
 
 ## Google Sheets setup
 
@@ -181,13 +195,13 @@ curl -X POST http://localhost:8000/v1/sources/search \
     "query": "battery replacement",
     "source_ids": ["jeep_wj_maintenance"],
     "retrieval_mode": "targeted",
-    "allowed_sensitivity": "medium",
+    "allowed_sensitivity": "low",
     "budget": {
       "max_results": 10,
       "max_bytes": 50000,
       "max_text_chars": 20000
     },
-    "include_raw": true
+    "include_raw": false
   }'
 ```
 
@@ -263,6 +277,19 @@ curl -X POST http://localhost:8000/v1/sources/context \
 
 Context supports `nearby_rows` for Google Sheets and `upcoming_events` for ICS calendar.
 
+## Smoke test flow
+
+Basic Docker-backed smoke tests are documented in [docs/smoke-tests.md](/home/danielnguyen/projects/danielnguyen/data-source-aggregator/docs/smoke-tests.md).
+
+The short version is:
+
+```bash
+docker compose up --build
+curl http://localhost:8000/health
+curl http://localhost:8000/v1/sources
+tail -n 5 var/audit/events.jsonl
+```
+
 ## Included example sources
 
 - `config/sources/jeep_wj_maintenance.example.yaml`
@@ -297,7 +324,7 @@ They are inactive until copied to non-example filenames.
 - Default path: `var/audit/events.jsonl`
 - Override env var: `AUDIT_LOG_PATH`
 - Audit logs record operation metadata, source IDs, result counts, status, and error codes.
-- Audit logs must not contain connector secrets or full raw result payloads.
+- Audit logs must not contain connector secrets, credential paths, spreadsheet IDs, private ICS URLs, raw connector configs, or full raw result payloads.
 
 ## Non-goals in this pass
 
