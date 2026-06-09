@@ -36,7 +36,7 @@ def test_build_source_registry_exposes_safe_fields_only() -> None:
     dumped = entry.model_dump(mode="json")
 
     assert dumped["source_id"] == "jeep_wj_maintenance"
-    assert dumped["capabilities"] == ["profile", "search", "fetch"]
+    assert dumped["capabilities"] == ["profile", "search", "fetch", "context"]
     assert "connector_config" not in dumped
     assert "sheet-secret-id" not in str(dumped)
 
@@ -75,4 +75,3 @@ def test_registry_detail_includes_safe_profile_and_retrieval() -> None:
     assert detail.profile.summary == "ICS calendar source with read-only event retrieval."
     assert detail.retrieval.default_mode.value == "targeted"
     assert "secret.ics" not in detail.model_dump_json()
-

@@ -197,7 +197,7 @@ class ResultEnvelope(BaseModel):
     text: str
     url: str | None = None
     confidence: Confidence = Confidence.NONE
-    raw: dict[str, object] = Field(default_factory=dict)
+    raw: dict[str, object] | None = None
     available_context: list[AvailableContext] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -265,4 +265,3 @@ class AuditEvent(BaseModel):
     estimated_bytes: int
     status: AuditStatus
     error_code: str | None = None
-

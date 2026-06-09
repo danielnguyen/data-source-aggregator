@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.audit import AuditLogWriter
-from app.connectors.base import get_connector
+from app.connectors import base as connector_base
 from app.errors import ServiceError
 from app.models import (
     AuditEvent,
@@ -56,7 +56,7 @@ async def run_search(
 
     result_envelopes = []
     for source_config in selected_sources:
-        connector = get_connector(source_config.connector)
+        connector = connector_base.get_connector(source_config.connector)
         result_envelopes.extend(await connector.search(request, source_config))
 
     bounded_results, budget_summary = enforce_budget(result_envelopes, effective_budget)

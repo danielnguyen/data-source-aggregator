@@ -44,7 +44,6 @@ async def test_sources_routes_return_safe_registry_entries(
     monkeypatch,
 ) -> None:
     _write_credentials_config(tmp_path, monkeypatch)
-    monkeypatch.setenv("JEEP_WJ_MAINTENANCE_SPREADSHEET_ID", "sheet-secret-id")
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     (source_dir / "source.yaml").write_text(
@@ -58,7 +57,7 @@ domain_tags: [vehicle, maintenance, jeep_wj]
 sensitivity: low
 access_mode: read_only
 connector_config:
-  spreadsheet_id_env: JEEP_WJ_MAINTENANCE_SPREADSHEET_ID
+  spreadsheet_id: sheet-secret-id
   worksheet: Maintenance
   header_row: 1
   credentials_ref: google_sheets_readonly
@@ -82,7 +81,7 @@ retrieval:
     payload = list_response.json()
     assert payload["sources"][0]["source_id"] == "jeep_wj_maintenance"
     assert payload["sources"][0]["status"] == "ready"
-    assert payload["sources"][0]["capabilities"] == ["profile", "search", "fetch"]
+    assert payload["sources"][0]["capabilities"] == ["profile", "search", "fetch", "context"]
     assert "connector_config" not in payload["sources"][0]
     assert "sheet-secret-id" not in str(payload)
 

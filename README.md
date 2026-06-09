@@ -50,6 +50,63 @@ These are intentionally gitignored.
 
 By default the service loads source configs from `config/sources` and credentials from `config/credentials.yaml`. You can override those with `SOURCE_CONFIG_DIR` and `CREDENTIALS_CONFIG_PATH`. The service also loads a local `.env` file on startup for service-level overrides.
 
+## Google Sheets setup
+
+Google Sheets is the first real connector in the service. It is read-only only.
+
+Example source config:
+
+```yaml
+source_id: jeep_wj_maintenance
+display_name: Jeep WJ Maintenance Log
+connector: google_sheets
+enabled: true
+
+domain_tags:
+  - vehicle
+  - maintenance
+  - jeep_wj
+
+sensitivity: low
+access_mode: read_only
+
+connector_config:
+  spreadsheet_id: "replace-with-google-sheet-id"
+  worksheet: Maintenance
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  max_context_rows: 250
+  allow_full_fetch: true
+```
+
+Example credential config:
+
+```yaml
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+```
+
+Supported Google Sheets credential refs in this pass:
+
+- `google_service_account_file`
+- `google_application_default`
+
+The connector uses the read-only Sheets scope:
+
+```text
+https://www.googleapis.com/auth/spreadsheets.readonly
+```
+
+No write operations are supported.
+
 ## API examples
 
 Health:
@@ -89,7 +146,7 @@ curl -X POST http://localhost:8000/v1/sources/search \
   }'
 ```
 
-Search currently returns empty stub results until a real connector is implemented.
+Google Sheets search now performs deterministic read-only row matching. Connectors that are not yet implemented may still return stub behavior.
 
 Fetch a source reference:
 
@@ -106,7 +163,7 @@ curl -X POST http://localhost:8000/v1/sources/fetch \
   }'
 ```
 
-Fetch currently returns `unsupported_operation` for stub connectors until PR3 implements Google Sheets.
+Fetch works for configured Google Sheets row and range `source_ref` values. Other connectors may still return `unsupported_operation`.
 
 Request broader context:
 
@@ -124,7 +181,7 @@ curl -X POST http://localhost:8000/v1/sources/context \
   }'
 ```
 
-Context currently returns `unsupported_operation` for stub connectors.
+Context supports `nearby_rows` for Google Sheets. Other connectors may still return `unsupported_operation`.
 
 ## Included example sources
 
@@ -151,7 +208,8 @@ They are inactive until copied to non-example filenames.
 - Retrieval budget model/enforcement
 - Stable error response shape
 - JSONL audit logging
-- Stub connector dispatch only
+- Read-only Google Sheets connector for search, fetch, and nearby row context
+- Stub connector dispatch for connectors that are not yet implemented
 
 ## Audit log
 
@@ -162,10 +220,8 @@ They are inactive until copied to non-example filenames.
 
 ## Non-goals in this pass
 
-- No Google Sheets API access yet
 - No ICS fetching yet
-- No real source search/fetch implementation yet
-- No filesystem/GitHub/Gmail/Google Docs connectors yet
+- No real ICS, filesystem, GitHub, Gmail, or Google Docs connector implementation yet
 - No write operations
 - No LLM integration
 - No memory promotion

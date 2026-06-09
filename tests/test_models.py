@@ -33,6 +33,7 @@ def test_result_envelope_defaults_are_stable() -> None:
     assert dumped["cache_status"] == "unknown"
     assert dumped["confidence"] == "none"
     assert dumped["available_context"] == []
+    assert dumped["raw"] == {}
 
 
 def test_retrieval_budget_enforcement_truncates_results(source_config_factory) -> None:
