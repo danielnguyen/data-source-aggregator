@@ -6,7 +6,11 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.errors import ServiceError
 from app.main import create_app
+from app.models import ContextRequest, FetchRequest, ResultEnvelope, SearchRequest, SourceConfig
+from app.services import fetch as fetch_service
+from app.services import search as search_service
 
 
 def _write_source_config(source_dir: Path) -> None:
@@ -51,8 +55,53 @@ credentials:
     monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
 
 
+class FakeApiConnector:
+    async def search(
+        self,
+        request: SearchRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        return []
+
+    async def fetch(
+        self,
+        request: FetchRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        raise ServiceError(
+            "unsupported_operation",
+            "Connector does not support fetch in this test.",
+            status_code=501,
+            details={"connector": source_config.connector, "operation": "fetch"},
+        )
+
+    async def context(
+        self,
+        request: ContextRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        raise ServiceError(
+            "unsupported_operation",
+            "Connector does not support context in this test.",
+            status_code=501,
+            details={"connector": source_config.connector, "operation": "context"},
+        )
+
+
+@pytest.fixture
+def fake_api_connector(monkeypatch):
+    connector = FakeApiConnector()
+    monkeypatch.setattr(search_service.connector_base, "get_connector", lambda _: connector)
+    monkeypatch.setattr(fetch_service.connector_base, "get_connector", lambda _: connector)
+    return connector
+
+
 @pytest.mark.anyio
-async def test_search_route_validates_request_shape(tmp_path: Path, monkeypatch) -> None:
+async def test_search_route_validates_request_shape(
+    tmp_path: Path,
+    monkeypatch,
+    fake_api_connector,
+) -> None:
     audit_path = tmp_path / "audit" / "events.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
     _write_credentials_config(tmp_path, monkeypatch)
@@ -77,6 +126,7 @@ async def test_search_route_validates_request_shape(tmp_path: Path, monkeypatch)
 async def test_search_route_returns_empty_stub_results_and_writes_audit(
     tmp_path: Path,
     monkeypatch,
+    fake_api_connector,
 ) -> None:
     audit_path = tmp_path / "audit" / "events.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
@@ -123,6 +173,7 @@ async def test_search_route_returns_empty_stub_results_and_writes_audit(
 async def test_search_route_returns_stable_unknown_source_error_and_writes_audit(
     tmp_path: Path,
     monkeypatch,
+    fake_api_connector,
 ) -> None:
     audit_path = tmp_path / "audit" / "events.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
@@ -155,6 +206,7 @@ async def test_search_route_returns_stable_unknown_source_error_and_writes_audit
 async def test_fetch_route_returns_unsupported_operation_and_writes_audit(
     tmp_path: Path,
     monkeypatch,
+    fake_api_connector,
 ) -> None:
     audit_path = tmp_path / "audit" / "events.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
@@ -186,7 +238,11 @@ async def test_fetch_route_returns_unsupported_operation_and_writes_audit(
 
 
 @pytest.mark.anyio
-async def test_fetch_route_rejects_invalid_source_ref(tmp_path: Path, monkeypatch) -> None:
+async def test_fetch_route_rejects_invalid_source_ref(
+    tmp_path: Path,
+    monkeypatch,
+    fake_api_connector,
+) -> None:
     audit_path = tmp_path / "audit" / "events.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
     _write_credentials_config(tmp_path, monkeypatch)

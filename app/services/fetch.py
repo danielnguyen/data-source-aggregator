@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.audit import AuditLogWriter
-from app.connectors.base import get_connector
+from app.connectors import base as connector_base
 from app.errors import ServiceError
 from app.models import (
     AuditEvent,
@@ -32,7 +32,7 @@ async def run_fetch(
             parsed_source_ref.source_id,
             parsed_source_ref.source_type,
         )
-        connector = get_connector(source_config.connector)
+        connector = connector_base.get_connector(source_config.connector)
         result_envelopes = await connector.fetch(request, source_config)
         bounded_results, budget_summary = enforce_budget(
             result_envelopes,
@@ -82,7 +82,7 @@ async def run_context(
             parsed_source_ref.source_id,
             parsed_source_ref.source_type,
         )
-        connector = get_connector(source_config.connector)
+        connector = connector_base.get_connector(source_config.connector)
         result_envelopes = await connector.context(request, source_config)
         bounded_results, budget_summary = enforce_budget(
             result_envelopes,

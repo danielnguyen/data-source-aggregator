@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from app.connectors.google_sheets import GoogleSheetsConnector
 from app.errors import ServiceError, SourceConfigValidationError
 from app.models import ContextRequest, FetchRequest, ResultEnvelope, SearchRequest, SourceConfig
 
 CONNECTOR_CAPABILITIES: dict[str, list[str]] = {
-    "google_sheets": ["profile", "search", "fetch"],
+    "google_sheets": ["profile", "search", "fetch", "context"],
     "ics_calendar": ["profile", "search", "fetch"],
+}
+
+CONNECTOR_FACTORIES = {
+    "google_sheets": GoogleSheetsConnector,
 }
 
 
@@ -30,6 +35,7 @@ def validate_connector_config(connector: str, connector_config: Mapping[str, obj
         _require_any(connector_config, "spreadsheet_id", "spreadsheet_id_env")
         _require(connector_config, "worksheet")
         _require(connector_config, "header_row")
+        _require(connector_config, "credentials_ref")
         return
 
     if connector == "ics_calendar":
@@ -89,5 +95,8 @@ class StubConnector:
         )
 
 
-def get_connector(connector_name: str) -> StubConnector:
+def get_connector(connector_name: str):
+    connector_factory = CONNECTOR_FACTORIES.get(connector_name)
+    if connector_factory is not None:
+        return connector_factory()
     return StubConnector(connector_name)
