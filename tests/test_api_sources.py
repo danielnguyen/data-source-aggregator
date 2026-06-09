@@ -91,4 +91,8 @@ async def test_get_source_returns_404_for_unknown_source(tmp_path: Path) -> None
         response = await client.get("/v1/sources/missing_source")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "source_not_found"
+    assert response.json()["error"] == {
+        "code": "source_not_found",
+        "message": "Source 'missing_source' is not configured or is disabled.",
+        "details": {"source_id": "missing_source"},
+    }
