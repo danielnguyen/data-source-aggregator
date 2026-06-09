@@ -11,6 +11,7 @@ from app.connectors.google_sheets import (
     GoogleSheetsConnector,
     parse_google_sheets_source_ref,
 )
+from app.connectors.ics_calendar import IcsCalendarConnector
 from app.credentials import CredentialConfig, CredentialRegistry, CredentialType
 from app.errors import ServiceError
 from app.models import ContextRequest, FetchRequest, SearchRequest
@@ -79,10 +80,10 @@ def test_get_connector_returns_real_google_sheets_connector() -> None:
     assert isinstance(connector, GoogleSheetsConnector)
 
 
-def test_ics_calendar_still_uses_stub_connector() -> None:
+def test_ics_calendar_returns_real_connector() -> None:
     connector = get_connector("ics_calendar")
 
-    assert isinstance(connector, StubConnector)
+    assert isinstance(connector, IcsCalendarConnector)
 
 
 @pytest.mark.anyio
