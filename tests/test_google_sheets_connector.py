@@ -11,6 +11,7 @@ from app.connectors.google_sheets import (
     GoogleSheetsConnector,
     parse_google_sheets_source_ref,
 )
+from app.credentials import CredentialConfig, CredentialRegistry, CredentialType
 from app.errors import ServiceError
 from app.models import ContextRequest, FetchRequest, SearchRequest
 
@@ -372,3 +373,117 @@ def test_connector_factory_map_can_be_overridden(monkeypatch) -> None:
     connector = get_connector("google_sheets")
 
     assert connector is fake_connector
+
+
+@pytest.mark.anyio
+async def test_missing_credential_does_not_expose_credential_ref(
+    google_sheets_source_config,
+) -> None:
+    connector = GoogleSheetsConnector(
+        credential_registry_loader=lambda: CredentialRegistry(credentials={}),
+    )
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.search(
+            SearchRequest(query="battery", include_raw=True),
+            google_sheets_source_config,
+        )
+
+    error_payload = {
+        "code": error_info.value.code,
+        "message": error_info.value.message,
+        "details": error_info.value.details,
+    }
+
+    assert "google_sheets_readonly" not in str(error_payload)
+    assert "credential_ref" not in str(error_payload)
+
+
+@pytest.mark.anyio
+async def test_unsupported_credential_type_does_not_expose_credential_ref(
+    google_sheets_source_config,
+) -> None:
+    connector = GoogleSheetsConnector(
+        credential_registry_loader=lambda: CredentialRegistry(
+            credentials={
+                "google_sheets_readonly": CredentialConfig(
+                    type=CredentialType.TOKEN_FILE,
+                    path="secrets/github_readonly_token",
+                )
+            }
+        ),
+    )
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.search(
+            SearchRequest(query="battery", include_raw=True),
+            google_sheets_source_config,
+        )
+
+    error_payload = {
+        "code": error_info.value.code,
+        "message": error_info.value.message,
+        "details": error_info.value.details,
+    }
+
+    assert "google_sheets_readonly" not in str(error_payload)
+    assert "credential_ref" not in str(error_payload)
+
+
+@pytest.mark.anyio
+async def test_credential_initialization_failure_does_not_expose_credential_ref(
+    google_sheets_source_config,
+    monkeypatch,
+) -> None:
+    connector = GoogleSheetsConnector(
+        credential_registry_loader=lambda: CredentialRegistry(
+            credentials={
+                "google_sheets_readonly": CredentialConfig(
+                    type=CredentialType.GOOGLE_SERVICE_ACCOUNT_FILE,
+                    path="/tmp/missing-service-account.json",
+                )
+            }
+        ),
+    )
+
+    class FakeServiceAccountCredentials:
+        @staticmethod
+        def from_service_account_file(path: str, scopes: list[str]):
+            raise RuntimeError(f"failed to initialize {path}")
+
+    def fake_google_auth_default(*, scopes):
+        return object(), None
+
+    def fake_build(*args, **kwargs):
+        return object()
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "google.oauth2.service_account",
+        type("service_account", (), {"Credentials": FakeServiceAccountCredentials}),
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "google.auth",
+        type("google_auth", (), {"default": fake_google_auth_default}),
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "googleapiclient.discovery",
+        type("googleapiclient_discovery", (), {"build": fake_build}),
+    )
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.search(
+            SearchRequest(query="battery", include_raw=True),
+            google_sheets_source_config,
+        )
+
+    error_payload = {
+        "code": error_info.value.code,
+        "message": error_info.value.message,
+        "details": error_info.value.details,
+    }
+
+    assert "google_sheets_readonly" not in str(error_payload)
+    assert "credential_ref" not in str(error_payload)

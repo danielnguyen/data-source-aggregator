@@ -344,9 +344,12 @@ class GoogleSheetsConnector:
         if credential_config is None:
             raise ServiceError(
                 "credentials_missing",
-                f"Credential ref '{credentials_ref}' is not configured.",
+                "The configured credential is not available for google_sheets.",
                 status_code=500,
-                details={"source_id": source_config.source_id, "credential_ref": credentials_ref},
+                details={
+                    "source_id": source_config.source_id,
+                    "connector": self.connector_name,
+                },
             )
 
         try:
@@ -372,12 +375,12 @@ class GoogleSheetsConnector:
             else:
                 raise ServiceError(
                     "credentials_missing",
-                    (
-                        f"Credential type '{credential_config.type.value}' "
-                        "is not supported for google_sheets."
-                    ),
+                    "The configured credential is not supported for google_sheets.",
                     status_code=500,
-                    details={"credential_ref": credentials_ref},
+                    details={
+                        "source_id": source_config.source_id,
+                        "connector": self.connector_name,
+                    },
                 )
 
             service = build("sheets", "v4", credentials=credentials, cache_discovery=False)
@@ -389,7 +392,10 @@ class GoogleSheetsConnector:
                 "credentials_missing",
                 "The google_sheets connector could not initialize its read-only credentials.",
                 status_code=500,
-                details={"credential_ref": credentials_ref, "source_id": source_config.source_id},
+                details={
+                    "source_id": source_config.source_id,
+                    "connector": self.connector_name,
+                },
             ) from exc
 
     def _spreadsheet_id(self, source_config: SourceConfig) -> str:
