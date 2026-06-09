@@ -1,16 +1,23 @@
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_example
 connector: google_sheets
 enabled: true
 
-description: Maintenance records for the Jeep WJ.
+public_profile:
+  display_name: Vehicle Log
+  description: Example vehicle maintenance and operating records.
+  domain_tags:
+    - vehicle
+    - maintenance
 
-domain_tags:
-  - vehicle
-  - maintenance
-  - jeep_wj
+private_profile:
+  display_name: Example Vehicle Maintenance Log
+  description: Private operator notes for a specific vehicle sheet.
+  domain_tags:
+    - vehicle
+    - ownership_cost
+    - odometer
 
-sensitivity: low
+sensitivity: medium
 access_mode: read_only
 
 connector_config:

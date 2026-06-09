@@ -9,10 +9,10 @@ Create the local runtime files outside the image:
 ```text
 config/
   sources/
-    jeep_wj_maintenance.example.yaml
-    leafs_calendar.example.yaml
-    jeep_wj_maintenance.yaml        # local, not committed
-    leafs_calendar.yaml             # local, not committed
+    vehicle_maintenance.example.yaml
+    calendar.example.yaml
+    vehicle_log_primary.yaml        # local, not committed
+    calendar_sports.yaml            # local, not committed
   credentials.yaml.example
   credentials.yaml                  # local, not committed
 
@@ -25,6 +25,7 @@ var/
 ```
 
 `config/credentials.yaml`, `secrets/`, `.env`, and `var/` are gitignored.
+Real local `config/sources/*.yaml` files are also gitignored by default; keep committed examples in `.example.yaml` files and keep operator configs local.
 
 ## Source templates stay inactive
 
@@ -33,12 +34,14 @@ Files ending in `.example.yaml` or `.example.yml` are templates only. The runtim
 To enable a source, copy the template to a non-example filename and edit the copy:
 
 ```bash
-cp config/sources/jeep_wj_maintenance.example.yaml config/sources/jeep_wj_maintenance.yaml
-cp config/sources/leafs_calendar.example.yaml config/sources/leafs_calendar.yaml
+cp config/sources/vehicle_maintenance.example.yaml config/sources/vehicle_log_primary.yaml
+cp config/sources/calendar.example.yaml config/sources/calendar_sports.yaml
 mkdir -p secrets var/audit
 ```
 
 Copy `config/credentials.yaml.example` to `config/credentials.yaml` only if you enable a source that uses `connector_config.credentials_ref`, such as Google Sheets. A public ICS-only setup does not need `config/credentials.yaml`.
+
+Use public-safe names when copying examples into real local config files. `source_id` is visible in APIs, source refs, audit events, and traces.
 
 ## Docker Compose
 
@@ -74,6 +77,14 @@ For readiness, treat the service as ready when both of these are true:
 2. `GET /v1/sources` returns the sources you intended to mount.
 
 If source config or credential refs are invalid, startup should fail rather than silently serving a broken configuration.
+
+## Source metadata privacy
+
+`source_id`, public display name, public description, and public domain tags are API-visible metadata. Treat them as safe-to-expose values.
+
+Use `public_profile` for safe metadata and `private_profile` only for local operator clarity. Do not put private facts in `source_id`, `public_profile`, or committed local config files.
+
+Spreadsheet IDs, private ICS URLs, credential refs, credential paths, tokens, and service-account file paths are sensitive config. They must not appear in API responses or audit logs.
 
 ## Safety notes
 

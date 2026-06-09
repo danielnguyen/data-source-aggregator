@@ -59,15 +59,27 @@ class RetrievalConfig(BaseModel):
     allow_full_fetch: bool
 
 
+class SourceMetadataProfile(BaseModel):
+    display_name: str = Field(min_length=1)
+    description: str | None = None
+    domain_tags: list[str] = Field(min_length=1)
+
+    @field_validator("domain_tags")
+    @classmethod
+    def validate_domain_tags(cls, value: list[str]) -> list[str]:
+        if any(not tag or not tag.strip() for tag in value):
+            raise ValueError("domain_tags must not contain empty values.")
+        return value
+
+
 class SourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_id: str
-    display_name: str = Field(min_length=1)
     connector: str = Field(min_length=1)
     enabled: bool
-    description: str | None = None
-    domain_tags: list[str] = Field(min_length=1)
+    public_profile: SourceMetadataProfile
+    private_profile: SourceMetadataProfile
     sensitivity: Sensitivity
     access_mode: AccessMode
     connector_config: dict[str, object]
@@ -83,12 +95,17 @@ class SourceConfig(BaseModel):
             raise ValueError("source_id must match [a-z0-9][a-z0-9_-]*.")
         return value
 
-    @field_validator("domain_tags")
-    @classmethod
-    def validate_domain_tags(cls, value: list[str]) -> list[str]:
-        if any(not tag or not tag.strip() for tag in value):
-            raise ValueError("domain_tags must not contain empty values.")
-        return value
+    @property
+    def public_display_name(self) -> str:
+        return self.public_profile.display_name
+
+    @property
+    def public_description(self) -> str | None:
+        return self.public_profile.description
+
+    @property
+    def public_domain_tags(self) -> list[str]:
+        return self.public_profile.domain_tags
 
 
 class SourceRegistryEntry(BaseModel):

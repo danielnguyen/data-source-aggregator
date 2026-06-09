@@ -1,0 +1,42 @@
+source_id: calendar_sports_example
+connector: ics_calendar
+enabled: true
+
+public_profile:
+  display_name: Sports Calendar
+  description: Example sports schedule source.
+  domain_tags:
+    - calendar
+    - sports
+
+private_profile:
+  display_name: Sports Team Calendar
+  description: Private operator details for a specific subscribed sports calendar.
+  domain_tags:
+    - hockey
+    - sports_team
+    - schedule
+
+sensitivity: low
+access_mode: read_only
+
+connector_config:
+  url: "https://example.com/sports-calendar.ics"
+  timezone: America/Toronto
+
+retrieval:
+  default_mode: targeted
+  max_results: 10
+  max_bytes: 100000
+  max_text_chars: 40000
+  lookback_days: 7
+  lookahead_days: 365
+  allow_full_fetch: false
+
+result_text:
+  title_from: summary
+  include_fields:
+    - summary
+    - dtstart
+    - dtend
+    - location

@@ -81,9 +81,9 @@ def build_source_registry(source_configs: list[SourceConfig]) -> SourceRegistry:
         entries.append(
             SourceRegistryDetail(
                 source_id=source_config.source_id,
-                display_name=source_config.display_name,
+                display_name=source_config.public_display_name,
                 connector=source_config.connector,
-                domain_tags=source_config.domain_tags,
+                domain_tags=source_config.public_domain_tags,
                 sensitivity=source_config.sensitivity,
                 access_mode=source_config.access_mode,
                 capabilities=capabilities,
@@ -101,9 +101,8 @@ def build_source_registry(source_configs: list[SourceConfig]) -> SourceRegistry:
 
 def _build_source_profile(source_config: SourceConfig) -> SourceProfile:
     if source_config.connector == "google_sheets":
-        worksheet = str(source_config.connector_config.get("worksheet", "worksheet"))
         return SourceProfile(
-            summary=f"Google Sheet source using worksheet {worksheet}.",
+            summary="Google Sheets source with read-only row and range retrieval.",
             content_types=["spreadsheet_row", "spreadsheet_range"],
         )
 

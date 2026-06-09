@@ -7,11 +7,19 @@ from app.registry import build_source_registry
 def test_build_source_registry_exposes_safe_fields_only() -> None:
     source_config = SourceConfig.model_validate(
         {
-            "source_id": "jeep_wj_maintenance",
-            "display_name": "Jeep WJ Maintenance Log",
+            "source_id": "vehicle_log_primary",
             "connector": "google_sheets",
             "enabled": True,
-            "domain_tags": ["vehicle", "maintenance"],
+            "public_profile": {
+                "display_name": "Vehicle Log - Primary",
+                "description": "Personal vehicle operating records.",
+                "domain_tags": ["vehicle", "maintenance"],
+            },
+            "private_profile": {
+                "display_name": "Primary Vehicle Logs",
+                "description": "Private operator description.",
+                "domain_tags": ["vehicle_detail", "ownership_cost"],
+            },
             "sensitivity": "low",
             "access_mode": "read_only",
             "connector_config": {
@@ -35,20 +43,31 @@ def test_build_source_registry_exposes_safe_fields_only() -> None:
     entry = registry.list_sources()[0]
     dumped = entry.model_dump(mode="json")
 
-    assert dumped["source_id"] == "jeep_wj_maintenance"
+    assert dumped["source_id"] == "vehicle_log_primary"
+    assert dumped["display_name"] == "Vehicle Log - Primary"
+    assert dumped["domain_tags"] == ["vehicle", "maintenance"]
     assert dumped["capabilities"] == ["profile", "search", "fetch", "context"]
     assert "connector_config" not in dumped
     assert "sheet-secret-id" not in str(dumped)
+    assert "Primary Vehicle Logs" not in str(dumped)
 
 
 def test_registry_detail_includes_safe_profile_and_retrieval() -> None:
     source_config = SourceConfig.model_validate(
         {
-            "source_id": "leafs_calendar",
-            "display_name": "Toronto Maple Leafs Calendar",
+            "source_id": "calendar_sports",
             "connector": "ics_calendar",
             "enabled": True,
-            "domain_tags": ["sports", "leafs"],
+            "public_profile": {
+                "display_name": "Sports Calendar",
+                "description": "Sports schedule source.",
+                "domain_tags": ["calendar", "sports"],
+            },
+            "private_profile": {
+                "display_name": "Sports Team Calendar",
+                "description": "Private subscribed feed.",
+                "domain_tags": ["sports", "sports_team"],
+            },
             "sensitivity": "low",
             "access_mode": "read_only",
             "connector_config": {
@@ -69,9 +88,11 @@ def test_registry_detail_includes_safe_profile_and_retrieval() -> None:
 
     registry = build_source_registry([source_config])
 
-    detail = registry.get_source("leafs_calendar")
+    detail = registry.get_source("calendar_sports")
 
     assert detail is not None
     assert detail.profile.summary == "ICS calendar source with read-only event retrieval."
     assert detail.retrieval.default_mode.value == "targeted"
     assert "secret.ics" not in detail.model_dump_json()
+    assert detail.display_name == "Sports Calendar"
+    assert detail.domain_tags == ["calendar", "sports"]

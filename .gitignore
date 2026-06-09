@@ -211,6 +211,9 @@ tempCodeRunnerFile.py
 var/
 secrets/
 config/credentials.yaml
+config/sources/*.yaml
+!config/sources/*.example.yaml
+!config/sources/*.example.yml
 
 # PyPI configuration file
 .pypirc

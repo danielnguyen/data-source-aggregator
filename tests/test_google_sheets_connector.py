@@ -29,6 +29,17 @@ class FakeGoogleSheetsClient(GoogleSheetsClient):
 @pytest.fixture
 def google_sheets_source_config(source_config_factory):
     return source_config_factory(
+        source_id="vehicle_log_primary",
+        public_profile={
+            "display_name": "Vehicle Log - Primary",
+            "description": "Personal vehicle operating records.",
+            "domain_tags": ["vehicle", "maintenance"],
+        },
+        private_profile={
+            "display_name": "Primary Vehicle Logs",
+            "description": "Private operator description.",
+            "domain_tags": ["vehicle_detail", "ownership_cost"],
+        },
         connector_config={
             "spreadsheet_id": "sheet-id",
             "worksheet": "Maintenance",
@@ -103,9 +114,10 @@ async def test_search_returns_matching_rows_from_fake_sheet_data(
 
     assert len(results) == 2
     assert results[0].title == "Battery replacement"
-    assert results[0].source_ref == "google_sheets:jeep_wj_maintenance:Maintenance!A2:E2"
+    assert results[0].source_ref == "google_sheets:vehicle_log_primary:Maintenance!A2:E2"
     assert results[0].content_type == "spreadsheet_row"
     assert results[0].confidence.value == "high"
+    assert results[0].source_name == "Vehicle Log - Primary"
 
 
 @pytest.mark.anyio
@@ -213,7 +225,7 @@ async def test_fetch_by_valid_row_source_ref_returns_expected_row(
 
     results = await connector.fetch(
         FetchRequest(
-            source_ref="google_sheets:jeep_wj_maintenance:Maintenance!A2:E2",
+            source_ref="google_sheets:vehicle_log_primary:Maintenance!A2:E2",
             include_raw=True,
             budget={"max_bytes": 100000},
         ),
@@ -222,6 +234,7 @@ async def test_fetch_by_valid_row_source_ref_returns_expected_row(
 
     assert len(results) == 1
     assert results[0].title == "Battery replacement"
+    assert results[0].source_name == "Vehicle Log - Primary"
 
 
 @pytest.mark.anyio
@@ -235,7 +248,7 @@ async def test_fetch_by_valid_range_source_ref_hides_spreadsheet_id(
 
     results = await connector.fetch(
         FetchRequest(
-            source_ref="google_sheets:jeep_wj_maintenance:Maintenance!A2:E3",
+            source_ref="google_sheets:vehicle_log_primary:Maintenance!A2:E3",
             include_raw=True,
             budget={"max_bytes": 100000},
         ),
@@ -243,6 +256,7 @@ async def test_fetch_by_valid_range_source_ref_hides_spreadsheet_id(
     )
 
     assert len(results) == 1
+    assert results[0].source_name == "Vehicle Log - Primary"
     assert results[0].raw is not None
     assert "spreadsheet_id" not in results[0].raw
     assert "sheet-id" not in str(results[0].raw)
@@ -260,7 +274,7 @@ async def test_fetch_by_malformed_source_ref_returns_invalid_source_ref(
     with pytest.raises(ServiceError, match="invalid"):
         await connector.fetch(
             FetchRequest(
-                source_ref="google_sheets:jeep_wj_maintenance:not-a-range",
+                source_ref="google_sheets:vehicle_log_primary:not-a-range",
                 include_raw=True,
                 budget={"max_bytes": 100000},
             ),
@@ -271,7 +285,7 @@ async def test_fetch_by_malformed_source_ref_returns_invalid_source_ref(
 @pytest.mark.anyio
 def test_parse_google_sheets_source_ref_rejects_bad_locator() -> None:
     with pytest.raises(ServiceError, match="invalid"):
-        parse_google_sheets_source_ref("google_sheets:jeep_wj_maintenance:not-a-range")
+        parse_google_sheets_source_ref("google_sheets:vehicle_log_primary:not-a-range")
 
 
 @pytest.mark.anyio
@@ -307,7 +321,7 @@ async def test_context_nearby_rows_returns_neighboring_rows(
 
     results = await connector.context(
         ContextRequest(
-            source_ref="google_sheets:jeep_wj_maintenance:Maintenance!A3:E3",
+            source_ref="google_sheets:vehicle_log_primary:Maintenance!A3:E3",
             context_mode="nearby_rows",
             budget={"max_rows": 3, "max_bytes": 100000},
         ),
@@ -319,6 +333,7 @@ async def test_context_nearby_rows_returns_neighboring_rows(
         "Oil change",
         "Battery terminal clean",
     ]
+    assert all(result.source_name == "Vehicle Log - Primary" for result in results)
 
 
 @pytest.mark.anyio
@@ -355,7 +370,7 @@ async def test_context_rejects_unknown_mode(
     with pytest.raises(ServiceError, match="not supported"):
         await connector.context(
             ContextRequest(
-                source_ref="google_sheets:jeep_wj_maintenance:Maintenance!A3:E3",
+                source_ref="google_sheets:vehicle_log_primary:Maintenance!A3:E3",
                 context_mode="sheet_profile",
                 budget={"max_rows": 3, "max_bytes": 100000},
             ),

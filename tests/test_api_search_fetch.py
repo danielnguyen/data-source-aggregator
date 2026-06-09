@@ -16,12 +16,17 @@ from app.services import search as search_service
 def _write_source_config(source_dir: Path) -> None:
     (source_dir / "source.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
 connector: google_sheets
 enabled: true
-description: Maintenance records for the Jeep WJ.
-domain_tags: [vehicle, maintenance, jeep_wj]
+public_profile:
+  display_name: Vehicle Log - Primary
+  description: Personal vehicle operating records.
+  domain_tags: [vehicle, maintenance]
+private_profile:
+  display_name: Primary Vehicle Logs
+  description: Fuel, cost, repair, odometer, shop, and ownership logs.
+  domain_tags: [vehicle_detail, fuel, ownership_cost, odometer]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -113,7 +118,7 @@ async def test_search_route_validates_request_shape(
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             "/v1/sources/search",
-            json={"source_ids": ["jeep_wj_maintenance"]},
+            json={"source_ids": ["vehicle_log_primary"]},
         )
 
     assert response.status_code == 422
@@ -141,7 +146,7 @@ async def test_search_route_returns_empty_stub_results_and_writes_audit(
             "/v1/sources/search",
             json={
                 "query": "battery replacement",
-                "source_ids": ["jeep_wj_maintenance"],
+                "source_ids": ["vehicle_log_primary"],
                 "domain_tags": ["vehicle"],
                 "retrieval_mode": "targeted",
                 "max_results": 10,
@@ -167,6 +172,9 @@ async def test_search_route_returns_empty_stub_results_and_writes_audit(
     assert audit_event["status"] == "success"
     assert audit_event["result_count"] == 0
     assert "sheet-secret-id" not in json.dumps(audit_event)
+    assert "google_sheets_readonly" not in json.dumps(audit_event)
+    assert "Primary Vehicle Logs" not in json.dumps(audit_event)
+    assert "ownership_cost" not in json.dumps(audit_event)
 
 
 @pytest.mark.anyio
@@ -220,7 +228,7 @@ async def test_fetch_route_returns_unsupported_operation_and_writes_audit(
         response = await client.post(
             "/v1/sources/fetch",
             json={
-                "source_ref": "google_sheets:jeep_wj_maintenance:Maintenance!A44:H44",
+                "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A44:H44",
                 "include_raw": True,
                 "budget": {"max_bytes": 50000, "max_text_chars": 20000},
             },

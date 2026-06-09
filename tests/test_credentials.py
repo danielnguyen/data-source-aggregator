@@ -168,11 +168,17 @@ credentials:
     source_dir.mkdir()
     (source_dir / "source.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle]
+public_profile:
+  display_name: Vehicle Log
+  description: Example vehicle records.
+  domain_tags: [vehicle]
+private_profile:
+  display_name: Example Private Vehicle Log
+  description: Private operator notes for a configured vehicle sheet.
+  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -206,11 +212,17 @@ def test_enabled_google_sheets_source_with_unknown_credentials_ref_fails_loudly(
     source_dir.mkdir()
     (source_dir / "source.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle]
+public_profile:
+  display_name: Vehicle Log
+  description: Example vehicle records.
+  domain_tags: [vehicle]
+private_profile:
+  display_name: Example Private Vehicle Log
+  description: Private operator notes for a configured vehicle sheet.
+  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -242,11 +254,17 @@ def test_enabled_source_requiring_credentials_fails_if_credentials_config_missin
     source_dir.mkdir()
     (source_dir / "source.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle]
+public_profile:
+  display_name: Vehicle Log
+  description: Example vehicle records.
+  domain_tags: [vehicle]
+private_profile:
+  display_name: Example Private Vehicle Log
+  description: Private operator notes for a configured vehicle sheet.
+  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -279,11 +297,17 @@ def test_disabled_source_with_unknown_credentials_ref_is_ignored_with_warning(
     source_dir.mkdir()
     (source_dir / "source.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
 connector: google_sheets
 enabled: false
-domain_tags: [vehicle]
+public_profile:
+  display_name: Vehicle Log
+  description: Example vehicle records.
+  domain_tags: [vehicle]
+private_profile:
+  display_name: Example Private Vehicle Log
+  description: Private operator notes for a configured vehicle sheet.
+  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:

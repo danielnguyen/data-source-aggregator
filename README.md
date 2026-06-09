@@ -33,12 +33,13 @@ Source configs remain the primary configuration mechanism:
 - `config/sources/*.yaml` defines configured sources
 - `config/credentials.yaml` defines stable credential refs
 - `secrets/` or other mounted paths hold private credential material
+- `config/sources/*.yaml` is treated as local operator config and is gitignored by default
 
 Files ending in `.example.yaml` or `.example.yml` are templates only and are ignored by the runtime loader.
 
 To activate a source, copy an example file to a non-example filename, then edit it:
 
-- `cp config/sources/jeep_wj_maintenance.example.yaml config/sources/jeep_wj_maintenance.yaml`
+- `cp config/sources/vehicle_maintenance.example.yaml config/sources/vehicle_log_primary.yaml`
 - `cp config/credentials.yaml.example config/credentials.yaml`
 
 Credential refs are referenced from source configs through `connector_config.credentials_ref`. The service validates the reference, but it does not expose credential paths, token values, or private key contents through its APIs or audit logs.
@@ -64,6 +65,23 @@ By default the service loads source configs from `config/sources` and credential
 
 The Docker image is intended to receive these files through mounts. Local `config/credentials.yaml`, `.env`, `secrets/`, and `var/` are excluded from image build context.
 
+## Source metadata privacy
+
+Source metadata is visible through APIs, source refs, request filters, audit logs, traces, and screenshots.
+
+Treat these as public-safe fields:
+
+- `source_id`
+- `public_profile.display_name`
+- `public_profile.description`
+- `public_profile.domain_tags`
+
+Do not put private facts in those fields.
+
+Use `private_profile` for local/operator clarity only. It must not appear in API responses or audit logs.
+
+Connector config is also private. Spreadsheet IDs, private ICS URLs, credential refs, credential paths, tokens, and service-account files must not appear in API responses or audit logs.
+
 ## Google Sheets setup
 
 Google Sheets is the first real connector in the service. It is read-only only.
@@ -71,17 +89,25 @@ Google Sheets is the first real connector in the service. It is read-only only.
 Example source config:
 
 ```yaml
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_example
 connector: google_sheets
 enabled: true
 
-domain_tags:
-  - vehicle
-  - maintenance
-  - jeep_wj
+public_profile:
+  display_name: Vehicle Log
+  description: Example vehicle maintenance and operating records.
+  domain_tags:
+    - vehicle
+    - maintenance
 
-sensitivity: low
+private_profile:
+  display_name: Example Vehicle Maintenance Log
+  description: Private operator notes for a specific vehicle sheet.
+  domain_tags:
+    - vehicle
+    - ownership_cost
+
+sensitivity: medium
 access_mode: read_only
 
 connector_config:
@@ -128,21 +154,29 @@ ICS calendar is also available as a real read-only connector.
 Example source config:
 
 ```yaml
-source_id: leafs_calendar
-display_name: Toronto Maple Leafs Calendar
+source_id: calendar_sports_example
 connector: ics_calendar
 enabled: true
 
-domain_tags:
-  - sports
-  - hockey
-  - leafs
+public_profile:
+  display_name: Sports Calendar
+  description: Example sports schedule source.
+  domain_tags:
+    - calendar
+    - sports
+
+private_profile:
+  display_name: Sports Team Calendar
+  description: Private operator-only details for a specific sports calendar.
+  domain_tags:
+    - hockey
+    - sports_team
 
 sensitivity: low
 access_mode: read_only
 
 connector_config:
-  url: "https://example.com/leafs.ics"
+  url: "https://example.com/sports-calendar.ics"
   timezone: America/Toronto
 
 retrieval:
@@ -183,7 +217,7 @@ curl http://localhost:8000/v1/sources
 Inspect one configured source:
 
 ```bash
-curl http://localhost:8000/v1/sources/jeep_wj_maintenance
+curl http://localhost:8000/v1/sources/vehicle_log_primary
 ```
 
 Search a configured source:
@@ -193,7 +227,7 @@ curl -X POST http://localhost:8000/v1/sources/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "battery replacement",
-    "source_ids": ["jeep_wj_maintenance"],
+    "source_ids": ["vehicle_log_primary"],
     "retrieval_mode": "targeted",
     "allowed_sensitivity": "low",
     "budget": {
@@ -213,7 +247,7 @@ Fetch a source reference:
 curl -X POST http://localhost:8000/v1/sources/fetch \
   -H "Content-Type: application/json" \
   -d '{
-    "source_ref": "google_sheets:jeep_wj_maintenance:Maintenance!A44:H44",
+    "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A44:H44",
     "include_raw": true,
     "budget": {
       "max_bytes": 50000,
@@ -230,7 +264,7 @@ Fetch a configured ICS event:
 curl -X POST http://localhost:8000/v1/sources/fetch \
   -H "Content-Type: application/json" \
   -d '{
-    "source_ref": "ics_calendar:leafs_calendar:event:leafs-habs-20261010",
+    "source_ref": "ics_calendar:calendar_sports:event:sports-team-home-20261010",
     "include_raw": true,
     "budget": {
       "max_bytes": 50000,
@@ -247,7 +281,7 @@ Request broader context:
 curl -X POST http://localhost:8000/v1/sources/context \
   -H "Content-Type: application/json" \
   -d '{
-    "source_ref": "google_sheets:jeep_wj_maintenance:Maintenance!A44:H44",
+    "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A44:H44",
     "context_mode": "nearby_rows",
     "budget": {
       "max_rows": 20,
@@ -265,7 +299,7 @@ Request upcoming ICS event context:
 curl -X POST http://localhost:8000/v1/sources/context \
   -H "Content-Type: application/json" \
   -d '{
-    "source_ref": "ics_calendar:leafs_calendar:event:leafs-habs-20261010",
+    "source_ref": "ics_calendar:calendar_sports:event:sports-team-home-20261010",
     "context_mode": "upcoming_events",
     "budget": {
       "max_rows": 5,
@@ -292,8 +326,8 @@ tail -n 5 var/audit/events.jsonl
 
 ## Included example sources
 
-- `config/sources/jeep_wj_maintenance.example.yaml`
-- `config/sources/leafs_calendar.example.yaml`
+- `config/sources/vehicle_maintenance.example.yaml`
+- `config/sources/calendar.example.yaml`
 - `config/credentials.yaml.example`
 
 These examples demonstrate source configs, credential refs, and private credential file mapping.
