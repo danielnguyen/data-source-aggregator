@@ -3,16 +3,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from app.connectors.google_sheets import GoogleSheetsConnector
+from app.connectors.ics_calendar import IcsCalendarConnector
 from app.errors import ServiceError, SourceConfigValidationError
 from app.models import ContextRequest, FetchRequest, ResultEnvelope, SearchRequest, SourceConfig
 
 CONNECTOR_CAPABILITIES: dict[str, list[str]] = {
     "google_sheets": ["profile", "search", "fetch", "context"],
-    "ics_calendar": ["profile", "search", "fetch"],
+    "ics_calendar": ["profile", "search", "fetch", "context"],
 }
 
 CONNECTOR_FACTORIES = {
     "google_sheets": GoogleSheetsConnector,
+    "ics_calendar": IcsCalendarConnector,
 }
 
 

@@ -2,7 +2,7 @@
 
 Data Source Aggregator is a standalone, read-only service for configured data source access. It lists configured sources and exposes foundational retrieval APIs for search, fetch, and context orchestration.
 
-It is not a memory service. It does not write to external systems, call an LLM, promote memory, or expose connector secrets through API responses or audit logs.
+It is not a memory service. It does not write to external systems, call an LLM, promote memory, or expose connector secrets or private source URLs through API responses or audit logs.
 
 ## Local setup
 
@@ -107,6 +107,51 @@ https://www.googleapis.com/auth/spreadsheets.readonly
 
 No write operations are supported.
 
+## ICS calendar setup
+
+ICS calendar is also available as a real read-only connector.
+
+Example source config:
+
+```yaml
+source_id: leafs_calendar
+display_name: Toronto Maple Leafs Calendar
+connector: ics_calendar
+enabled: true
+
+domain_tags:
+  - sports
+  - hockey
+  - leafs
+
+sensitivity: low
+access_mode: read_only
+
+connector_config:
+  url: "https://example.com/leafs.ics"
+  timezone: America/Toronto
+
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  lookback_days: 30
+  lookahead_days: 365
+  allow_full_fetch: true
+
+result_text:
+  title_from: summary
+  include_fields:
+    - summary
+    - start
+    - end
+    - location
+    - description
+```
+
+ICS sources are fetched read-only from the configured URL. The service does not expose the configured URL in result payloads, errors, or audit logs.
+
 ## API examples
 
 Health:
@@ -165,6 +210,23 @@ curl -X POST http://localhost:8000/v1/sources/fetch \
 
 Fetch works for configured Google Sheets row and range `source_ref` values. Other connectors may still return `unsupported_operation`.
 
+Fetch a configured ICS event:
+
+```bash
+curl -X POST http://localhost:8000/v1/sources/fetch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_ref": "ics_calendar:leafs_calendar:event:leafs-habs-20261010",
+    "include_raw": true,
+    "budget": {
+      "max_bytes": 50000,
+      "max_text_chars": 20000
+    }
+  }'
+```
+
+ICS fetch works for configured event `source_ref` values and remains read-only.
+
 Request broader context:
 
 ```bash
@@ -183,13 +245,31 @@ curl -X POST http://localhost:8000/v1/sources/context \
 
 Context supports `nearby_rows` for Google Sheets. Other connectors may still return `unsupported_operation`.
 
+Request upcoming ICS event context:
+
+```bash
+curl -X POST http://localhost:8000/v1/sources/context \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_ref": "ics_calendar:leafs_calendar:event:leafs-habs-20261010",
+    "context_mode": "upcoming_events",
+    "budget": {
+      "max_rows": 5,
+      "max_bytes": 100000,
+      "max_text_chars": 40000
+    }
+  }'
+```
+
+Context supports `nearby_rows` for Google Sheets and `upcoming_events` for ICS calendar.
+
 ## Included example sources
 
 - `config/sources/jeep_wj_maintenance.example.yaml`
 - `config/sources/leafs_calendar.example.yaml`
 - `config/credentials.yaml.example`
 
-These examples demonstrate source configs, credential refs, and private credential file mapping without enabling live connector access in this pass.
+These examples demonstrate source configs, credential refs, and private credential file mapping.
 They are inactive until copied to non-example filenames.
 
 ## Current scope
@@ -209,6 +289,7 @@ They are inactive until copied to non-example filenames.
 - Stable error response shape
 - JSONL audit logging
 - Read-only Google Sheets connector for search, fetch, and nearby row context
+- Read-only ICS calendar connector for search, fetch, and upcoming event context
 - Stub connector dispatch for connectors that are not yet implemented
 
 ## Audit log
@@ -220,8 +301,10 @@ They are inactive until copied to non-example filenames.
 
 ## Non-goals in this pass
 
-- No ICS fetching yet
-- No real ICS, filesystem, GitHub, Gmail, or Google Docs connector implementation yet
+- No filesystem, GitHub, Gmail, or Google Docs connector implementation yet
+- No calendar writes or mutations
+- No CalDAV or Google Calendar API integration
+- No OAuth flow for private calendars
 - No write operations
 - No LLM integration
 - No memory promotion
