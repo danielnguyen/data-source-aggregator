@@ -8,9 +8,11 @@ It is not a memory service. It does not write to external systems, call an LLM, 
 
 1. Create a virtual environment.
 2. Install the project with dev dependencies: `pip install -e .[dev]`
-3. Copy `config/credentials.yaml.example` to `config/credentials.yaml` and set any credential refs you plan to use.
-4. Copy `.env.example` to `.env` only if you want service-level overrides.
-5. Start the service with `uvicorn app.main:app --reload`
+3. Copy a source template to a non-example filename and edit it:
+   `cp config/sources/jeep_wj_maintenance.example.yaml config/sources/jeep_wj_maintenance.yaml`
+4. Copy `config/credentials.yaml.example` to `config/credentials.yaml` only if an enabled source references a `credentials_ref`.
+5. Copy `.env.example` to `.env` only if you want service-level overrides.
+6. Start the service with `uvicorn app.main:app --reload`
 
 ## Configuration model
 
@@ -19,6 +21,13 @@ Source configs remain the primary configuration mechanism:
 - `config/sources/*.yaml` defines configured sources
 - `config/credentials.yaml` defines stable credential refs
 - `secrets/` or other mounted paths hold private credential material
+
+Files ending in `.example.yaml` or `.example.yml` are templates only and are ignored by the runtime loader.
+
+To activate a source, copy an example file to a non-example filename, then edit it:
+
+- `cp config/sources/jeep_wj_maintenance.example.yaml config/sources/jeep_wj_maintenance.yaml`
+- `cp config/credentials.yaml.example config/credentials.yaml`
 
 Credential refs are referenced from source configs through `connector_config.credentials_ref`. The service validates the reference, but it does not expose credential paths, token values, or private key contents through its APIs or audit logs.
 
@@ -124,6 +133,7 @@ Context currently returns `unsupported_operation` for stub connectors.
 - `config/credentials.yaml.example`
 
 These examples demonstrate source configs, credential refs, and private credential file mapping without enabling live connector access in this pass.
+They are inactive until copied to non-example filenames.
 
 ## Current scope
 

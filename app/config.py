@@ -57,7 +57,11 @@ def load_source_configs(config_dir: Path | None = None) -> list[SourceConfig]:
 
 
 def _iter_source_files(directory: Path) -> list[Path]:
-    return [*directory.glob("*.yaml"), *directory.glob("*.yml")]
+    return [
+        path
+        for path in [*directory.glob("*.yaml"), *directory.glob("*.yml")]
+        if not path.name.endswith(".example.yaml") and not path.name.endswith(".example.yml")
+    ]
 
 
 def _load_yaml_file(path: Path) -> dict[str, Any]:
