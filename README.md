@@ -269,7 +269,7 @@ Context supports `nearby_rows` for Google Sheets and `upcoming_events` for ICS c
 - `config/sources/leafs_calendar.example.yaml`
 - `config/credentials.yaml.example`
 
-These examples demonstrate source configs, credential refs, and private credential file mapping without enabling live connector access in this pass.
+These examples demonstrate source configs, credential refs, and private credential file mapping.
 They are inactive until copied to non-example filenames.
 
 ## Current scope
@@ -301,8 +301,10 @@ They are inactive until copied to non-example filenames.
 
 ## Non-goals in this pass
 
-- No ICS fetching yet
-- No real ICS, filesystem, GitHub, Gmail, or Google Docs connector implementation yet
+- No filesystem, GitHub, Gmail, or Google Docs connector implementation yet
+- No calendar writes or mutations
+- No CalDAV or Google Calendar API integration
+- No OAuth flow for private calendars
 - No write operations
 - No LLM integration
 - No memory promotion
