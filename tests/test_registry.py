@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+from app.models import SourceConfig
+from app.registry import build_source_registry
+
+
+def test_build_source_registry_exposes_safe_fields_only() -> None:
+    source_config = SourceConfig.model_validate(
+        {
+            "source_id": "jeep_wj_maintenance",
+            "display_name": "Jeep WJ Maintenance Log",
+            "connector": "google_sheets",
+            "enabled": True,
+            "domain_tags": ["vehicle", "maintenance"],
+            "sensitivity": "low",
+            "access_mode": "read_only",
+            "connector_config": {
+                "spreadsheet_id": "sheet-secret-id",
+                "worksheet": "Maintenance",
+                "header_row": 1,
+            },
+            "retrieval": {
+                "default_mode": "targeted",
+                "max_results": 20,
+                "max_bytes": 100000,
+                "max_text_chars": 40000,
+                "max_context_rows": 250,
+                "allow_full_fetch": True,
+            },
+        }
+    )
+
+    registry = build_source_registry([source_config])
+
+    entry = registry.list_sources()[0]
+    dumped = entry.model_dump(mode="json")
+
+    assert dumped["source_id"] == "jeep_wj_maintenance"
+    assert dumped["capabilities"] == ["profile", "search", "fetch"]
+    assert "connector_config" not in dumped
+    assert "sheet-secret-id" not in str(dumped)
+
+
+def test_registry_detail_includes_safe_profile_and_retrieval() -> None:
+    source_config = SourceConfig.model_validate(
+        {
+            "source_id": "leafs_calendar",
+            "display_name": "Toronto Maple Leafs Calendar",
+            "connector": "ics_calendar",
+            "enabled": True,
+            "domain_tags": ["sports", "leafs"],
+            "sensitivity": "low",
+            "access_mode": "read_only",
+            "connector_config": {
+                "url": "https://example.com/secret.ics",
+                "timezone": "America/Toronto",
+            },
+            "retrieval": {
+                "default_mode": "targeted",
+                "max_results": 10,
+                "max_bytes": 100000,
+                "max_text_chars": 40000,
+                "lookback_days": 7,
+                "lookahead_days": 365,
+                "allow_full_fetch": False,
+            },
+        }
+    )
+
+    registry = build_source_registry([source_config])
+
+    detail = registry.get_source("leafs_calendar")
+
+    assert detail is not None
+    assert detail.profile.summary == "ICS calendar source with read-only event retrieval."
+    assert detail.retrieval.default_mode.value == "targeted"
+    assert "secret.ics" not in detail.model_dump_json()
+
