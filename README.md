@@ -12,6 +12,7 @@ It is not a memory service. It does not write to external systems, call an LLM, 
 4. Start the service with `uvicorn app.main:app --reload`
 
 By default the service loads source configs from `config/sources`. You can override that with `SOURCE_CONFIG_DIR`.
+The service also loads a local `.env` file on startup so connector env refs work during local development without a separate export step.
 
 ## API examples
 

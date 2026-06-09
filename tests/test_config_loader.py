@@ -109,6 +109,111 @@ retrieval:
     assert configs == []
 
 
+def test_enabled_config_with_missing_env_var_fails_loudly(tmp_path: Path) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "missing-env.yaml").write_text(
+        """
+source_id: jeep_wj_maintenance
+display_name: Jeep WJ Maintenance Log
+connector: google_sheets
+enabled: true
+domain_tags: [vehicle]
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id_env: MISSING_SHEET_ID
+  worksheet: Maintenance
+  header_row: 1
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceConfigValidationError, match="MISSING_SHEET_ID"):
+        load_source_configs(source_dir)
+
+
+def test_disabled_config_with_missing_env_var_is_ignored_with_warning(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "missing-env-disabled.yaml").write_text(
+        """
+source_id: leafs_calendar
+display_name: Toronto Maple Leafs Calendar
+connector: ics_calendar
+enabled: false
+domain_tags: [sports]
+sensitivity: low
+access_mode: read_only
+connector_config:
+  url_env: MISSING_ICS_URL
+  timezone: America/Toronto
+retrieval:
+  default_mode: targeted
+  max_results: 10
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: false
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning, match="missing-env-disabled.yaml"):
+        configs = load_source_configs(source_dir)
+
+    assert configs == []
+
+
+def test_load_source_configs_reads_local_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_dir = tmp_path / "project"
+    source_dir = project_dir / "config" / "sources"
+    source_dir.mkdir(parents=True)
+    (project_dir / ".env").write_text(
+        "DOTENV_SHEET_ID=sheet-from-dotenv\n",
+        encoding="utf-8",
+    )
+    (source_dir / "source.yaml").write_text(
+        """
+source_id: jeep_wj_maintenance
+display_name: Jeep WJ Maintenance Log
+connector: google_sheets
+enabled: true
+domain_tags: [vehicle, maintenance]
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id_env: DOTENV_SHEET_ID
+  worksheet: Maintenance
+  header_row: 1
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("DOTENV_SHEET_ID", raising=False)
+    monkeypatch.chdir(project_dir)
+
+    configs = load_source_configs(source_dir)
+
+    assert len(configs) == 1
+    assert configs[0].connector_config["spreadsheet_id"] == "sheet-from-dotenv"
+
+
 @pytest.mark.parametrize(
     ("field_name", "field_value"),
     [

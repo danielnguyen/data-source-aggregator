@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import find_dotenv, load_dotenv
 from pydantic import ValidationError
 
 from app.connectors.base import validate_connector_config
@@ -16,6 +17,7 @@ DEFAULT_SOURCE_CONFIG_DIR = Path("config/sources")
 
 
 def get_source_config_dir() -> Path:
+    _load_local_dotenv()
     configured = os.getenv("SOURCE_CONFIG_DIR")
     if configured:
         return Path(configured)
@@ -23,6 +25,7 @@ def get_source_config_dir() -> Path:
 
 
 def load_source_configs(config_dir: Path | None = None) -> list[SourceConfig]:
+    _load_local_dotenv()
     directory = (config_dir or get_source_config_dir()).resolve()
     if not directory.exists():
         return []
@@ -30,12 +33,12 @@ def load_source_configs(config_dir: Path | None = None) -> list[SourceConfig]:
     configs: list[SourceConfig] = []
     for path in sorted(_iter_source_files(directory)):
         data = _load_yaml_file(path)
-        resolved = _resolve_env_references(data)
         try:
+            resolved = _resolve_env_references(data)
             source_config = SourceConfig.model_validate(resolved)
             validate_connector_config(source_config.connector, source_config.connector_config)
         except (ValidationError, SourceConfigValidationError) as exc:
-            if _is_enabled_value(resolved):
+            if _is_enabled_value(data):
                 message = f"Invalid enabled source config '{path.name}': {exc}"
                 raise SourceConfigValidationError(message) from exc
 
@@ -92,3 +95,9 @@ def _read_required_env(name: str) -> str:
 
 def _is_enabled_value(data: dict[str, Any]) -> bool:
     return bool(data.get("enabled"))
+
+
+def _load_local_dotenv() -> None:
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path=dotenv_path, override=False)
