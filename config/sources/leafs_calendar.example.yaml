@@ -1,0 +1,37 @@
+source_id: leafs_calendar
+display_name: Toronto Maple Leafs Calendar
+connector: ics_calendar
+enabled: true
+
+description: Public or subscribed Toronto Maple Leafs schedule feed.
+
+domain_tags:
+  - sports
+  - hockey
+  - leafs
+  - schedule
+
+sensitivity: low
+access_mode: read_only
+
+connector_config:
+  url_env: LEAFS_ICS_URL
+  timezone: America/Toronto
+
+retrieval:
+  default_mode: targeted
+  max_results: 10
+  max_bytes: 100000
+  max_text_chars: 40000
+  lookback_days: 7
+  lookahead_days: 365
+  allow_full_fetch: false
+
+result_text:
+  title_from: summary
+  include_fields:
+    - summary
+    - dtstart
+    - dtend
+    - location
+
