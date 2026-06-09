@@ -168,6 +168,58 @@ retrieval:
     assert configs[0].source_id == "jeep_wj_maintenance"
 
 
+def test_active_copy_is_loaded_while_example_template_stays_ignored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials_path = tmp_path / "credentials.yaml"
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    source_payload = """
+source_id: jeep_wj_maintenance
+display_name: Jeep WJ Maintenance Log
+connector: google_sheets
+enabled: true
+domain_tags: [vehicle]
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id: sheet-id
+  worksheet: Maintenance
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+"""
+    (source_dir / "jeep_wj_maintenance.example.yaml").write_text(
+        source_payload,
+        encoding="utf-8",
+    )
+    (source_dir / "jeep_wj_maintenance.yaml").write_text(
+        source_payload,
+        encoding="utf-8",
+    )
+
+    configs = load_source_configs(source_dir)
+
+    assert len(configs) == 1
+    assert configs[0].source_id == "jeep_wj_maintenance"
+
+
 def test_invalid_enabled_source_config_fails_loudly(tmp_path: Path) -> None:
     source_dir = tmp_path / "sources"
     source_dir.mkdir()

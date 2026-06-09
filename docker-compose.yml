@@ -1,8 +1,26 @@
 services:
   data-source-aggregator:
     build: .
+    restart: unless-stopped
     ports:
       - "8000:8000"
-    env_file:
-      - .env
-
+    environment:
+      SOURCE_CONFIG_DIR: /app/config/sources
+      CREDENTIALS_CONFIG_PATH: /app/config/credentials.yaml
+      AUDIT_LOG_PATH: /app/var/audit/events.jsonl
+    volumes:
+      - ./config:/app/config:ro
+      - ./secrets:/app/secrets:ro
+      - ./var/audit:/app/var/audit
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

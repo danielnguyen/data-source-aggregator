@@ -1,0 +1,13 @@
+.env
+.env.*
+config/credentials.yaml
+secrets/
+var/
+.git
+.github
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__/
+*.pyc
+*.pyo
