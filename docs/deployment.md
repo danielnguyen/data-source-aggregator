@@ -35,16 +35,16 @@ To enable a source, copy the template to a non-example filename and edit the cop
 ```bash
 cp config/sources/jeep_wj_maintenance.example.yaml config/sources/jeep_wj_maintenance.yaml
 cp config/sources/leafs_calendar.example.yaml config/sources/leafs_calendar.yaml
-cp config/credentials.yaml.example config/credentials.yaml
 mkdir -p secrets var/audit
 ```
 
+Copy `config/credentials.yaml.example` to `config/credentials.yaml` only if you enable a source that uses `connector_config.credentials_ref`, such as Google Sheets. A public ICS-only setup does not need `config/credentials.yaml`.
+
 ## Docker Compose
 
-The included [docker-compose.yml](/home/danielnguyen/projects/danielnguyen/data-source-aggregator/docker-compose.yml) mounts configs and secrets read-only, and mounts the audit log directory writable:
+The included [docker-compose.yml](../docker-compose.yml) mounts the whole `config/` directory read-only, mounts secrets read-only, and mounts the audit log directory writable:
 
-- `./config/sources:/app/config/sources:ro`
-- `./config/credentials.yaml:/app/config/credentials.yaml:ro`
+- `./config:/app/config:ro`
 - `./secrets:/app/secrets:ro`
 - `./var/audit:/app/var/audit`
 
@@ -53,6 +53,8 @@ The service-level environment is:
 - `SOURCE_CONFIG_DIR=/app/config/sources`
 - `CREDENTIALS_CONFIG_PATH=/app/config/credentials.yaml`
 - `AUDIT_LOG_PATH=/app/var/audit/events.jsonl`
+
+This layout allows `/app/config/credentials.yaml` to be absent cleanly when no enabled source needs credentials. Source examples still remain inactive until copied to non-example filenames inside the mounted `config/sources/` directory.
 
 Bring the service up:
 

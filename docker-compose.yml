@@ -9,8 +9,7 @@ services:
       CREDENTIALS_CONFIG_PATH: /app/config/credentials.yaml
       AUDIT_LOG_PATH: /app/var/audit/events.jsonl
     volumes:
-      - ./config/sources:/app/config/sources:ro
-      - ./config/credentials.yaml:/app/config/credentials.yaml:ro
+      - ./config:/app/config:ro
       - ./secrets:/app/secrets:ro
       - ./var/audit:/app/var/audit
     healthcheck:

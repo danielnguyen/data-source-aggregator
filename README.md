@@ -24,7 +24,7 @@ docker compose up --build
 
 The included compose file mounts source configs, credential config, secrets, and audit logs instead of baking them into the image.
 
-See [docs/deployment.md](/home/danielnguyen/projects/danielnguyen/data-source-aggregator/docs/deployment.md) for the mounted layout and [docs/smoke-tests.md](/home/danielnguyen/projects/danielnguyen/data-source-aggregator/docs/smoke-tests.md) for a quick verification flow.
+See [docs/deployment.md](docs/deployment.md) for the mounted layout and [docs/smoke-tests.md](docs/smoke-tests.md) for a quick verification flow.
 
 ## Configuration model
 
@@ -279,7 +279,7 @@ Context supports `nearby_rows` for Google Sheets and `upcoming_events` for ICS c
 
 ## Smoke test flow
 
-Basic Docker-backed smoke tests are documented in [docs/smoke-tests.md](/home/danielnguyen/projects/danielnguyen/data-source-aggregator/docs/smoke-tests.md).
+Basic Docker-backed smoke tests are documented in [docs/smoke-tests.md](docs/smoke-tests.md).
 
 The short version is:
 
