@@ -107,6 +107,13 @@ class GoogleSheetsConnector:
         source_config: SourceConfig,
     ) -> list[ResultEnvelope]:
         parsed = parse_google_sheets_source_ref(request.source_ref)
+        if parsed.source_id != source_config.source_id:
+            raise ServiceError(
+                "invalid_source_ref",
+                "The provided source_ref does not match the configured source.",
+                status_code=400,
+                details={"source_ref": request.source_ref},
+            )
         expected_worksheet = source_config.connector_config["worksheet"]
         if parsed.worksheet != expected_worksheet:
             raise ServiceError(
@@ -157,6 +164,13 @@ class GoogleSheetsConnector:
             )
 
         parsed = parse_google_sheets_source_ref(request.source_ref)
+        if parsed.source_id != source_config.source_id:
+            raise ServiceError(
+                "invalid_source_ref",
+                "The provided source_ref does not match the configured source.",
+                status_code=400,
+                details={"source_ref": request.source_ref},
+            )
         expected_worksheet = source_config.connector_config["worksheet"]
         if parsed.worksheet != expected_worksheet:
             raise ServiceError(
@@ -261,7 +275,6 @@ class GoogleSheetsConnector:
             confidence=Confidence.HIGH,
             raw=(
                 {
-                    "spreadsheet_id": self._spreadsheet_id(source_config),
                     "sheet_name": self._worksheet_name(source_config),
                     "range": sheet_row.range_name.split("!", 1)[1],
                     "row_number": sheet_row.row_number,
@@ -306,7 +319,6 @@ class GoogleSheetsConnector:
             confidence=Confidence.HIGH,
             raw=(
                 {
-                    "spreadsheet_id": self._spreadsheet_id(source_config),
                     "sheet_name": parsed.worksheet,
                     "range": parsed.original_locator.split("!", 1)[1],
                     "headers": headers,
@@ -416,6 +428,7 @@ class GoogleSheetsConnector:
 
 @dataclass
 class ParsedGoogleSheetsSourceRef:
+    source_id: str
     worksheet: str
     start_col: str
     start_row: int
@@ -456,6 +469,7 @@ def parse_google_sheets_source_ref(source_ref: str) -> ParsedGoogleSheetsSourceR
         )
 
     return ParsedGoogleSheetsSourceRef(
+        source_id=parsed_source_ref.source_id,
         worksheet=worksheet,
         start_col=match.group("start_col"),
         start_row=start_row,

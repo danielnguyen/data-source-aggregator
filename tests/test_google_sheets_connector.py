@@ -196,6 +196,8 @@ async def test_raw_is_included_when_include_raw_true(
 
     assert results[0].raw is not None
     assert results[0].raw["row_number"] == 2
+    assert "spreadsheet_id" not in results[0].raw
+    assert "sheet-id" not in str(results[0].raw)
 
 
 @pytest.mark.anyio
@@ -218,6 +220,30 @@ async def test_fetch_by_valid_row_source_ref_returns_expected_row(
 
     assert len(results) == 1
     assert results[0].title == "Battery replacement"
+
+
+@pytest.mark.anyio
+async def test_fetch_by_valid_range_source_ref_hides_spreadsheet_id(
+    google_sheets_source_config,
+    fake_sheet_values,
+) -> None:
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient(fake_sheet_values),
+    )
+
+    results = await connector.fetch(
+        FetchRequest(
+            source_ref="google_sheets:jeep_wj_maintenance:Maintenance!A2:E3",
+            include_raw=True,
+            budget={"max_bytes": 100000},
+        ),
+        google_sheets_source_config,
+    )
+
+    assert len(results) == 1
+    assert results[0].raw is not None
+    assert "spreadsheet_id" not in results[0].raw
+    assert "sheet-id" not in str(results[0].raw)
 
 
 @pytest.mark.anyio
@@ -247,6 +273,28 @@ def test_parse_google_sheets_source_ref_rejects_bad_locator() -> None:
 
 
 @pytest.mark.anyio
+async def test_fetch_rejects_mismatched_source_id(
+    google_sheets_source_config,
+    fake_sheet_values,
+) -> None:
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient(fake_sheet_values),
+    )
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.fetch(
+            FetchRequest(
+                source_ref="google_sheets:other_source:Maintenance!A2:E2",
+                include_raw=True,
+                budget={"max_bytes": 100000},
+            ),
+            google_sheets_source_config,
+        )
+
+    assert error_info.value.code == "invalid_source_ref"
+
+
+@pytest.mark.anyio
 async def test_context_nearby_rows_returns_neighboring_rows(
     google_sheets_source_config,
     fake_sheet_values,
@@ -269,6 +317,28 @@ async def test_context_nearby_rows_returns_neighboring_rows(
         "Oil change",
         "Battery terminal clean",
     ]
+
+
+@pytest.mark.anyio
+async def test_context_rejects_mismatched_source_id(
+    google_sheets_source_config,
+    fake_sheet_values,
+) -> None:
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient(fake_sheet_values),
+    )
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.context(
+            ContextRequest(
+                source_ref="google_sheets:other_source:Maintenance!A3:E3",
+                context_mode="nearby_rows",
+                budget={"max_rows": 3, "max_bytes": 100000},
+            ),
+            google_sheets_source_config,
+        )
+
+    assert error_info.value.code == "invalid_source_ref"
 
 
 @pytest.mark.anyio
