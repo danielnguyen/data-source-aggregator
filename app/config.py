@@ -10,6 +10,7 @@ from dotenv import find_dotenv, load_dotenv
 from pydantic import ValidationError
 
 from app.connectors.base import validate_connector_config
+from app.credentials import CredentialRegistry, load_credential_registry
 from app.errors import SourceConfigValidationError
 from app.models import SourceConfig
 
@@ -30,6 +31,7 @@ def load_source_configs(config_dir: Path | None = None) -> list[SourceConfig]:
     if not directory.exists():
         return []
 
+    credential_registry = load_credential_registry()
     configs: list[SourceConfig] = []
     for path in sorted(_iter_source_files(directory)):
         data = _load_yaml_file(path)
@@ -37,6 +39,7 @@ def load_source_configs(config_dir: Path | None = None) -> list[SourceConfig]:
             resolved = _resolve_env_references(data)
             source_config = SourceConfig.model_validate(resolved)
             validate_connector_config(source_config.connector, source_config.connector_config)
+            validate_source_credentials(source_config, credential_registry)
         except (ValidationError, SourceConfigValidationError) as exc:
             if _is_enabled_value(data):
                 message = f"Invalid enabled source config '{path.name}': {exc}"
@@ -95,6 +98,21 @@ def _read_required_env(name: str) -> str:
 
 def _is_enabled_value(data: dict[str, Any]) -> bool:
     return bool(data.get("enabled"))
+
+
+def validate_source_credentials(
+    source_config: SourceConfig,
+    credential_registry: CredentialRegistry,
+) -> None:
+    credentials_ref = source_config.connector_config.get("credentials_ref")
+    if not isinstance(credentials_ref, str) or not credentials_ref:
+        return
+
+    if credentials_ref not in credential_registry.credentials:
+        raise SourceConfigValidationError(
+            f"Source '{source_config.source_id}' references unknown credential_ref "
+            f"'{credentials_ref}'."
+        )
 
 
 def _load_local_dotenv() -> None:

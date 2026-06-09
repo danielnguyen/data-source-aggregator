@@ -15,7 +15,7 @@ sensitivity: low
 access_mode: read_only
 
 connector_config:
-  url_env: LEAFS_ICS_URL
+  url: "https://example.com/leafs.ics"
   timezone: America/Toronto
 
 retrieval:
@@ -34,4 +34,3 @@ result_text:
     - dtstart
     - dtend
     - location
-

@@ -37,10 +37,25 @@ retrieval:
     )
 
 
+def _write_credentials_config(tmp_path: Path, monkeypatch) -> None:
+    credentials_path = tmp_path / "credentials.yaml"
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
+
+
 @pytest.mark.anyio
 async def test_search_route_validates_request_shape(tmp_path: Path, monkeypatch) -> None:
     audit_path = tmp_path / "audit" / "events.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     _write_source_config(source_dir)
@@ -65,6 +80,7 @@ async def test_search_route_returns_empty_stub_results_and_writes_audit(
 ) -> None:
     audit_path = tmp_path / "audit" / "events.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     _write_source_config(source_dir)
@@ -110,6 +126,7 @@ async def test_search_route_returns_stable_unknown_source_error_and_writes_audit
 ) -> None:
     audit_path = tmp_path / "audit" / "events.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     _write_source_config(source_dir)
@@ -141,6 +158,7 @@ async def test_fetch_route_returns_unsupported_operation_and_writes_audit(
 ) -> None:
     audit_path = tmp_path / "audit" / "events.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     _write_source_config(source_dir)
@@ -171,6 +189,7 @@ async def test_fetch_route_returns_unsupported_operation_and_writes_audit(
 async def test_fetch_route_rejects_invalid_source_ref(tmp_path: Path, monkeypatch) -> None:
     audit_path = tmp_path / "audit" / "events.jsonl"
     monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     _write_source_config(source_dir)

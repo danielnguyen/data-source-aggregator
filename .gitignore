@@ -209,6 +209,8 @@ tempCodeRunnerFile.py
 
 # Local runtime files
 var/
+secrets/
+config/credentials.yaml
 
 # PyPI configuration file
 .pypirc

@@ -8,11 +8,38 @@ It is not a memory service. It does not write to external systems, call an LLM, 
 
 1. Create a virtual environment.
 2. Install the project with dev dependencies: `pip install -e .[dev]`
-3. Copy `.env.example` to `.env` and set any required values.
-4. Start the service with `uvicorn app.main:app --reload`
+3. Copy `config/credentials.yaml.example` to `config/credentials.yaml` and set any credential refs you plan to use.
+4. Copy `.env.example` to `.env` only if you want service-level overrides.
+5. Start the service with `uvicorn app.main:app --reload`
 
-By default the service loads source configs from `config/sources`. You can override that with `SOURCE_CONFIG_DIR`.
-The service also loads a local `.env` file on startup so connector env refs work during local development without a separate export step.
+## Configuration model
+
+Source configs remain the primary configuration mechanism:
+
+- `config/sources/*.yaml` defines configured sources
+- `config/credentials.yaml` defines stable credential refs
+- `secrets/` or other mounted paths hold private credential material
+
+Credential refs are referenced from source configs through `connector_config.credentials_ref`. The service validates the reference, but it does not expose credential paths, token values, or private key contents through its APIs or audit logs.
+
+`.env` is optional and should only be used for service-level overrides such as:
+
+- `SOURCE_CONFIG_DIR`
+- `AUDIT_LOG_PATH`
+- `CREDENTIALS_CONFIG_PATH`
+
+Do not use `.env` as the primary place for source IDs, URLs, tokens, or private keys.
+
+## Private local files
+
+- `config/credentials.yaml`
+- `secrets/`
+- `.env`
+- `var/`
+
+These are intentionally gitignored.
+
+By default the service loads source configs from `config/sources` and credentials from `config/credentials.yaml`. You can override those with `SOURCE_CONFIG_DIR` and `CREDENTIALS_CONFIG_PATH`. The service also loads a local `.env` file on startup for service-level overrides.
 
 ## API examples
 
@@ -94,8 +121,9 @@ Context currently returns `unsupported_operation` for stub connectors.
 
 - `config/sources/jeep_wj_maintenance.example.yaml`
 - `config/sources/leafs_calendar.example.yaml`
+- `config/credentials.yaml.example`
 
-These examples demonstrate the shared source config shape and environment-based connector settings without enabling live connector access in this pass.
+These examples demonstrate source configs, credential refs, and private credential file mapping without enabling live connector access in this pass.
 
 ## Current scope
 

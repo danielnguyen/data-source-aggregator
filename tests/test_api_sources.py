@@ -8,6 +8,20 @@ import pytest
 from app.main import create_app
 
 
+def _write_credentials_config(tmp_path: Path, monkeypatch) -> None:
+    credentials_path = tmp_path / "credentials.yaml"
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
+
+
 @pytest.mark.anyio
 async def test_health_route(tmp_path: Path) -> None:
     source_dir = tmp_path / "sources"
@@ -29,6 +43,7 @@ async def test_sources_routes_return_safe_registry_entries(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
     monkeypatch.setenv("JEEP_WJ_MAINTENANCE_SPREADSHEET_ID", "sheet-secret-id")
     source_dir = tmp_path / "sources"
     source_dir.mkdir()

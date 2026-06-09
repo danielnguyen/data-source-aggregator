@@ -13,6 +13,17 @@ def test_load_source_configs_resolves_env_vars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SHEET_ID", "sheet-secret-id")
+    credentials_path = tmp_path / "credentials.yaml"
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     (source_dir / "source.yaml").write_text(
@@ -28,6 +39,7 @@ connector_config:
   spreadsheet_id_env: SHEET_ID
   worksheet: Maintenance
   header_row: 1
+  credentials_ref: google_sheets_readonly
 retrieval:
   default_mode: targeted
   max_results: 20
@@ -109,7 +121,20 @@ retrieval:
     assert configs == []
 
 
-def test_enabled_config_with_missing_env_var_fails_loudly(tmp_path: Path) -> None:
+def test_enabled_config_with_missing_env_var_fails_loudly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials_path = tmp_path / "credentials.yaml"
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     (source_dir / "missing-env.yaml").write_text(
@@ -125,6 +150,7 @@ connector_config:
   spreadsheet_id_env: MISSING_SHEET_ID
   worksheet: Maintenance
   header_row: 1
+  credentials_ref: google_sheets_readonly
 retrieval:
   default_mode: targeted
   max_results: 20
@@ -135,6 +161,7 @@ retrieval:
         encoding="utf-8",
     )
 
+    monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
     with pytest.raises(SourceConfigValidationError, match="MISSING_SHEET_ID"):
         load_source_configs(source_dir)
 
@@ -177,8 +204,18 @@ def test_load_source_configs_reads_local_dotenv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project_dir = tmp_path / "project"
+    credentials_path = project_dir / "config" / "credentials.yaml"
     source_dir = project_dir / "config" / "sources"
     source_dir.mkdir(parents=True)
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
     (project_dir / ".env").write_text(
         "DOTENV_SHEET_ID=sheet-from-dotenv\n",
         encoding="utf-8",
@@ -196,6 +233,7 @@ connector_config:
   spreadsheet_id_env: DOTENV_SHEET_ID
   worksheet: Maintenance
   header_row: 1
+  credentials_ref: google_sheets_readonly
 retrieval:
   default_mode: targeted
   max_results: 20

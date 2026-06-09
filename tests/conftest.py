@@ -20,6 +20,7 @@ def source_config_factory():
                 "spreadsheet_id": "sheet-id",
                 "worksheet": "Maintenance",
                 "header_row": 1,
+                "credentials_ref": "google_sheets_readonly",
             },
             "retrieval": {
                 "default_mode": "targeted",
