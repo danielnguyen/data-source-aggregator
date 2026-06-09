@@ -3,12 +3,25 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.connectors.base import capabilities_for_connector
-from app.models import SourceConfig, SourceProfile, SourceRegistryDetail, SourceRegistryEntry
+from app.models import (
+    Sensitivity,
+    SourceConfig,
+    SourceProfile,
+    SourceRegistryDetail,
+    SourceRegistryEntry,
+)
 
 
 class SourceRegistry:
-    def __init__(self, entries: list[SourceRegistryDetail]) -> None:
+    def __init__(
+        self,
+        entries: list[SourceRegistryDetail],
+        source_configs: list[SourceConfig],
+    ) -> None:
         self._entries = {entry.source_id: entry for entry in entries}
+        self._source_configs = {
+            source_config.source_id: source_config for source_config in source_configs
+        }
 
     def list_sources(self) -> list[SourceRegistryEntry]:
         return [
@@ -18,6 +31,44 @@ class SourceRegistry:
 
     def get_source(self, source_id: str) -> SourceRegistryDetail | None:
         return self._entries.get(source_id)
+
+    def get_source_config(self, source_id: str) -> SourceConfig | None:
+        return self._source_configs.get(source_id)
+
+    def select_sources(
+        self,
+        *,
+        source_ids: list[str] | None = None,
+        domain_tags: list[str] | None = None,
+        allowed_sensitivity: Sensitivity,
+        required_capability: str,
+    ) -> list[SourceConfig]:
+        if source_ids:
+            selected: list[SourceConfig] = []
+            for source_id in source_ids:
+                source_config = self._source_configs.get(source_id)
+                entry = self._entries.get(source_id)
+                if source_config is None or entry is None or not entry.enabled:
+                    continue
+                if required_capability not in entry.capabilities:
+                    continue
+                if not _sensitivity_allowed(entry.sensitivity, allowed_sensitivity):
+                    continue
+                selected.append(source_config)
+            return selected
+
+        matched: list[SourceConfig] = []
+        requested_tags = set(domain_tags or [])
+        for source_id, entry in self._entries.items():
+            if not entry.enabled or required_capability not in entry.capabilities:
+                continue
+            if not _sensitivity_allowed(entry.sensitivity, allowed_sensitivity):
+                continue
+            if requested_tags and requested_tags.isdisjoint(entry.domain_tags):
+                continue
+            matched.append(self._source_configs[source_id])
+
+        return matched
 
 
 def build_source_registry(source_configs: list[SourceConfig]) -> SourceRegistry:
@@ -45,7 +96,7 @@ def build_source_registry(source_configs: list[SourceConfig]) -> SourceRegistry:
             )
         )
 
-    return SourceRegistry(entries)
+    return SourceRegistry(entries, source_configs)
 
 
 def _build_source_profile(source_config: SourceConfig) -> SourceProfile:
@@ -64,3 +115,12 @@ def _build_source_profile(source_config: SourceConfig) -> SourceProfile:
 
     return SourceProfile(summary="Configured source.", content_types=["source_record"])
 
+
+def _sensitivity_allowed(source_sensitivity: Sensitivity, allowed_sensitivity: Sensitivity) -> bool:
+    order = {
+        Sensitivity.LOW: 0,
+        Sensitivity.MEDIUM: 1,
+        Sensitivity.HIGH: 2,
+        Sensitivity.RESTRICTED: 3,
+    }
+    return order[source_sensitivity] <= order[allowed_sensitivity]

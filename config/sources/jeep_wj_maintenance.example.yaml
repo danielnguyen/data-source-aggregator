@@ -14,7 +14,7 @@ sensitivity: low
 access_mode: read_only
 
 connector_config:
-  spreadsheet_id_env: JEEP_WJ_MAINTENANCE_SPREADSHEET_ID
+  spreadsheet_id: "replace-with-google-sheet-id"
   worksheet: Maintenance
   header_row: 1
   credentials_ref: google_sheets_readonly
@@ -38,4 +38,3 @@ result_text:
     - Cost
     - Shop
     - Notes
-

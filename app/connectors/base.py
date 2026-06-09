@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from app.errors import SourceConfigValidationError
+from app.errors import ServiceError, SourceConfigValidationError
+from app.models import ContextRequest, FetchRequest, ResultEnvelope, SearchRequest, SourceConfig
 
 CONNECTOR_CAPABILITIES: dict[str, list[str]] = {
     "google_sheets": ["profile", "search", "fetch"],
@@ -51,3 +52,42 @@ def _require_any(config: Mapping[str, object], *keys: str) -> None:
     joined = ", ".join(keys)
     raise SourceConfigValidationError(f"Connector config must define one of: {joined}.")
 
+
+class StubConnector:
+    def __init__(self, connector_name: str) -> None:
+        self.connector_name = connector_name
+
+    async def search(
+        self,
+        request: SearchRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        return []
+
+    async def fetch(
+        self,
+        request: FetchRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        raise ServiceError(
+            "unsupported_operation",
+            f"Connector '{self.connector_name}' does not support fetch in this pass.",
+            status_code=501,
+            details={"connector": self.connector_name, "operation": "fetch"},
+        )
+
+    async def context(
+        self,
+        request: ContextRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        raise ServiceError(
+            "unsupported_operation",
+            f"Connector '{self.connector_name}' does not support context in this pass.",
+            status_code=501,
+            details={"connector": self.connector_name, "operation": "context"},
+        )
+
+
+def get_connector(connector_name: str) -> StubConnector:
+    return StubConnector(connector_name)

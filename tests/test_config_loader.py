@@ -13,6 +13,17 @@ def test_load_source_configs_resolves_env_vars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SHEET_ID", "sheet-secret-id")
+    credentials_path = tmp_path / "credentials.yaml"
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     (source_dir / "source.yaml").write_text(
@@ -28,6 +39,7 @@ connector_config:
   spreadsheet_id_env: SHEET_ID
   worksheet: Maintenance
   header_row: 1
+  credentials_ref: google_sheets_readonly
 retrieval:
   default_mode: targeted
   max_results: 20
@@ -43,6 +55,117 @@ retrieval:
     assert len(configs) == 1
     assert configs[0].connector_config["spreadsheet_id"] == "sheet-secret-id"
     assert "spreadsheet_id_env" not in configs[0].connector_config
+
+
+def test_example_yaml_source_configs_are_ignored(tmp_path: Path) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "jeep_wj_maintenance.example.yaml").write_text(
+        """
+source_id: jeep_wj_maintenance
+display_name: Jeep WJ Maintenance Log
+connector: google_sheets
+enabled: true
+domain_tags: [vehicle]
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id: sheet-id
+  worksheet: Maintenance
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+""",
+        encoding="utf-8",
+    )
+
+    configs = load_source_configs(source_dir)
+
+    assert configs == []
+
+
+def test_example_yml_source_configs_are_ignored(tmp_path: Path) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "jeep_wj_maintenance.example.yml").write_text(
+        """
+source_id: jeep_wj_maintenance
+display_name: Jeep WJ Maintenance Log
+connector: google_sheets
+enabled: true
+domain_tags: [vehicle]
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id: sheet-id
+  worksheet: Maintenance
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+""",
+        encoding="utf-8",
+    )
+
+    configs = load_source_configs(source_dir)
+
+    assert configs == []
+
+
+def test_non_example_yaml_source_config_is_loaded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials_path = tmp_path / "credentials.yaml"
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "jeep_wj_maintenance.yaml").write_text(
+        """
+source_id: jeep_wj_maintenance
+display_name: Jeep WJ Maintenance Log
+connector: google_sheets
+enabled: true
+domain_tags: [vehicle]
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id: sheet-id
+  worksheet: Maintenance
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+""",
+        encoding="utf-8",
+    )
+
+    configs = load_source_configs(source_dir)
+
+    assert len(configs) == 1
+    assert configs[0].source_id == "jeep_wj_maintenance"
 
 
 def test_invalid_enabled_source_config_fails_loudly(tmp_path: Path) -> None:
@@ -109,7 +232,20 @@ retrieval:
     assert configs == []
 
 
-def test_enabled_config_with_missing_env_var_fails_loudly(tmp_path: Path) -> None:
+def test_enabled_config_with_missing_env_var_fails_loudly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials_path = tmp_path / "credentials.yaml"
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     (source_dir / "missing-env.yaml").write_text(
@@ -125,6 +261,7 @@ connector_config:
   spreadsheet_id_env: MISSING_SHEET_ID
   worksheet: Maintenance
   header_row: 1
+  credentials_ref: google_sheets_readonly
 retrieval:
   default_mode: targeted
   max_results: 20
@@ -135,6 +272,7 @@ retrieval:
         encoding="utf-8",
     )
 
+    monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
     with pytest.raises(SourceConfigValidationError, match="MISSING_SHEET_ID"):
         load_source_configs(source_dir)
 
@@ -177,8 +315,18 @@ def test_load_source_configs_reads_local_dotenv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project_dir = tmp_path / "project"
+    credentials_path = project_dir / "config" / "credentials.yaml"
     source_dir = project_dir / "config" / "sources"
     source_dir.mkdir(parents=True)
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
     (project_dir / ".env").write_text(
         "DOTENV_SHEET_ID=sheet-from-dotenv\n",
         encoding="utf-8",
@@ -196,6 +344,7 @@ connector_config:
   spreadsheet_id_env: DOTENV_SHEET_ID
   worksheet: Maintenance
   header_row: 1
+  credentials_ref: google_sheets_readonly
 retrieval:
   default_mode: targeted
   max_results: 20
