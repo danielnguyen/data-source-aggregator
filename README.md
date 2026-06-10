@@ -1,112 +1,58 @@
 # Data Source Aggregator
 
-Data Source Aggregator is a standalone, read-only service for configured data source access. It lists configured sources and exposes foundational retrieval APIs for search, fetch, and context orchestration.
+Data Source Aggregator is a read-only FastAPI service for searching and fetching configured sources.
 
-It is not a memory service. It does not write to external systems, call an LLM, promote memory, or expose connector secrets or private source URLs through API responses or audit logs.
+## Run locally
 
-## Local setup
+- `pip install -e .[dev]`
+- `uvicorn app.main:app --reload`
 
-1. Create a virtual environment.
-2. Install the project with dev dependencies: `pip install -e .[dev]`
-3. Copy any source template you want to enable to a non-example filename.
-4. Copy `config/credentials.yaml.example` to `config/credentials.yaml` only if an enabled source references a `credentials_ref`.
-5. Create `secrets/` and `var/audit/` as needed for local runtime files.
-6. Copy `.env.example` to `.env` only if you want service-level overrides for non-Docker runs.
-7. Start the service with `uvicorn app.main:app --reload`
-
-## Docker Compose
-
-Use Docker Compose for local or server deployment:
+## Docker
 
 ```bash
 docker compose up --build
 ```
 
-The included compose file mounts source configs, credential config, secrets, and audit logs instead of baking them into the image.
+See [docs/deployment.md](docs/deployment.md) for the mount layout and [docs/smoke-tests.md](docs/smoke-tests.md) for a short smoke test.
 
-See [docs/deployment.md](docs/deployment.md) for the mounted layout and [docs/smoke-tests.md](docs/smoke-tests.md) for a quick verification flow.
+## Config files
 
-## Configuration model
+- `config/sources/*.yaml`
+- `config/credentials.yaml`
+- `secrets/`
+- `var/audit/`
 
-Source configs remain the primary configuration mechanism:
+### Example config files
 
-- `config/sources/*.yaml` defines configured sources
-- `config/credentials.yaml` defines stable credential refs
-- `secrets/` or other mounted paths hold private credential material
-- `config/sources/*.yaml` is treated as local operator config and is gitignored by default
+- `config/sources/vehicle_maintenance.example.yaml`
+- `config/sources/calendar.example.yaml`
+- `config/credentials.yaml.example`
 
-Files ending in `.example.yaml` or `.example.yml` are templates only and are ignored by the runtime loader.
+## Local source configs
 
-To activate a source, copy an example file to a non-example filename, then edit it:
+Real source configs live in `config/sources/*.yaml` and are gitignored by default.
 
-- `cp config/sources/vehicle_maintenance.example.yaml config/sources/vehicle_log_primary.yaml`
-- `cp config/credentials.yaml.example config/credentials.yaml`
+Committed files under `config/sources/*.example.yaml` are examples only.
 
-Credential refs are referenced from source configs through `connector_config.credentials_ref`. The service validates the reference, but it does not expose credential paths, token values, or private key contents through its APIs or audit logs.
+## Local files (gitignored)
 
-`.env` is optional and should only be used for service-level overrides such as:
-
-- `SOURCE_CONFIG_DIR`
-- `AUDIT_LOG_PATH`
-- `CREDENTIALS_CONFIG_PATH`
-
-Do not use `.env` as the primary place for source IDs, URLs, tokens, or private keys.
-
-## Private local files
-
+- `config/sources/*.yaml`
 - `config/credentials.yaml`
 - `secrets/`
 - `.env`
 - `var/`
 
-These are intentionally gitignored.
-
-By default the service loads source configs from `config/sources` and credentials from `config/credentials.yaml`. You can override those with `SOURCE_CONFIG_DIR` and `CREDENTIALS_CONFIG_PATH`. The service also loads a local `.env` file on startup for service-level overrides.
-
-The Docker image is intended to receive these files through mounts. Local `config/credentials.yaml`, `.env`, `secrets/`, and `var/` are excluded from image build context.
-
-## Source metadata privacy
-
-Source metadata is visible through APIs, source refs, request filters, audit logs, traces, and screenshots.
-
-Treat these as public-safe fields:
-
-- `source_id`
-- `public_profile.display_name`
-- `public_profile.description`
-- `public_profile.domain_tags`
-
-Do not put private facts in those fields.
-
-Use `private_profile` for local/operator clarity only. It must not appear in API responses or audit logs.
-
-Connector config is also private. Spreadsheet IDs, private ICS URLs, credential refs, credential paths, tokens, and service-account files must not appear in API responses or audit logs.
-
-## Google Sheets setup
-
-Google Sheets is the first real connector in the service. It is read-only only.
-
-Example source config:
+## Google Sheets
 
 ```yaml
 source_id: vehicle_log_example
+display_name: Vehicle Log
+description: Example vehicle maintenance and operating records.
+domain_tags:
+  - vehicle
+  - maintenance
 connector: google_sheets
 enabled: true
-
-public_profile:
-  display_name: Vehicle Log
-  description: Example vehicle maintenance and operating records.
-  domain_tags:
-    - vehicle
-    - maintenance
-
-private_profile:
-  display_name: Example Vehicle Maintenance Log
-  description: Private operator notes for a specific vehicle sheet.
-  domain_tags:
-    - vehicle
-    - ownership_cost
-
 sensitivity: medium
 access_mode: read_only
 
@@ -125,7 +71,7 @@ retrieval:
   allow_full_fetch: true
 ```
 
-Example credential config:
+### Credentials
 
 ```yaml
 credentials:
@@ -134,44 +80,17 @@ credentials:
     path: secrets/google_sheets_readonly.json
 ```
 
-Supported Google Sheets credential refs in this pass:
-
-- `google_service_account_file`
-- `google_application_default`
-
-The connector uses the read-only Sheets scope:
-
-```text
-https://www.googleapis.com/auth/spreadsheets.readonly
-```
-
-No write operations are supported.
-
-## ICS calendar setup
-
-ICS calendar is also available as a real read-only connector.
-
-Example source config:
+## ICS calendar
 
 ```yaml
 source_id: calendar_sports_example
+display_name: Sports Calendar
+description: Example sports schedule source.
+domain_tags:
+  - calendar
+  - sports
 connector: ics_calendar
 enabled: true
-
-public_profile:
-  display_name: Sports Calendar
-  description: Example sports schedule source.
-  domain_tags:
-    - calendar
-    - sports
-
-private_profile:
-  display_name: Sports Team Calendar
-  description: Private operator-only details for a specific sports calendar.
-  domain_tags:
-    - hockey
-    - sports_team
-
 sensitivity: low
 access_mode: read_only
 
@@ -198,8 +117,6 @@ result_text:
     - description
 ```
 
-ICS sources are fetched read-only from the configured URL. The service does not expose the configured URL in result payloads, errors, or audit logs.
-
 ## API examples
 
 Health:
@@ -208,19 +125,13 @@ Health:
 curl http://localhost:8000/health
 ```
 
-List configured sources:
+List sources:
 
 ```bash
 curl http://localhost:8000/v1/sources
 ```
 
-Inspect one configured source:
-
-```bash
-curl http://localhost:8000/v1/sources/vehicle_log_primary
-```
-
-Search a configured source:
+Search:
 
 ```bash
 curl -X POST http://localhost:8000/v1/sources/search \
@@ -239,9 +150,7 @@ curl -X POST http://localhost:8000/v1/sources/search \
   }'
 ```
 
-Google Sheets search now performs deterministic read-only row matching. Connectors that are not yet implemented may still return stub behavior.
-
-Fetch a source reference:
+Fetch:
 
 ```bash
 curl -X POST http://localhost:8000/v1/sources/fetch \
@@ -256,44 +165,7 @@ curl -X POST http://localhost:8000/v1/sources/fetch \
   }'
 ```
 
-Fetch works for configured Google Sheets row and range `source_ref` values. Other connectors may still return `unsupported_operation`.
-
-Fetch a configured ICS event:
-
-```bash
-curl -X POST http://localhost:8000/v1/sources/fetch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "source_ref": "ics_calendar:calendar_sports:event:sports-team-home-20261010",
-    "include_raw": true,
-    "budget": {
-      "max_bytes": 50000,
-      "max_text_chars": 20000
-    }
-  }'
-```
-
-ICS fetch works for configured event `source_ref` values and remains read-only.
-
-Request broader context:
-
-```bash
-curl -X POST http://localhost:8000/v1/sources/context \
-  -H "Content-Type: application/json" \
-  -d '{
-    "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A44:H44",
-    "context_mode": "nearby_rows",
-    "budget": {
-      "max_rows": 20,
-      "max_bytes": 100000,
-      "max_text_chars": 40000
-    }
-  }'
-```
-
-Context supports `nearby_rows` for Google Sheets. Other connectors may still return `unsupported_operation`.
-
-Request upcoming ICS event context:
+Context:
 
 ```bash
 curl -X POST http://localhost:8000/v1/sources/context \
@@ -309,64 +181,7 @@ curl -X POST http://localhost:8000/v1/sources/context \
   }'
 ```
 
-Context supports `nearby_rows` for Google Sheets and `upcoming_events` for ICS calendar.
-
-## Smoke test flow
-
-Basic Docker-backed smoke tests are documented in [docs/smoke-tests.md](docs/smoke-tests.md).
-
-The short version is:
-
-```bash
-docker compose up --build
-curl http://localhost:8000/health
-curl http://localhost:8000/v1/sources
-tail -n 5 var/audit/events.jsonl
-```
-
-## Included example sources
-
-- `config/sources/vehicle_maintenance.example.yaml`
-- `config/sources/calendar.example.yaml`
-- `config/credentials.yaml.example`
-
-These examples demonstrate source configs, credential refs, and private credential file mapping.
-They are inactive until copied to non-example filenames.
-
-## Current scope
-
-- FastAPI application skeleton
-- `GET /health`
-- `GET /v1/sources`
-- `GET /v1/sources/{source_id}`
-- `POST /v1/sources/search`
-- `POST /v1/sources/fetch`
-- `POST /v1/sources/context`
-- Source config models and YAML loader
-- Runtime source registry inferred from validated configs
-- Result envelope model
-- Source reference parser
-- Retrieval budget model/enforcement
-- Stable error response shape
-- JSONL audit logging
-- Read-only Google Sheets connector for search, fetch, and nearby row context
-- Read-only ICS calendar connector for search, fetch, and upcoming event context
-- Stub connector dispatch for connectors that are not yet implemented
-
 ## Audit log
 
-- Default path: `var/audit/events.jsonl`
-- Override env var: `AUDIT_LOG_PATH`
-- Audit logs record operation metadata, source IDs, result counts, status, and error codes.
-- Audit logs must not contain connector secrets, credential paths, spreadsheet IDs, private ICS URLs, raw connector configs, or full raw result payloads.
-
-## Non-goals in this pass
-
-- No filesystem, GitHub, Gmail, or Google Docs connector implementation yet
-- No calendar writes or mutations
-- No CalDAV or Google Calendar API integration
-- No OAuth flow for private calendars
-- No write operations
-- No LLM integration
-- No memory promotion
-- No universal ontology
+- Path: `var/audit/events.jsonl`
+- Override with `AUDIT_LOG_PATH`

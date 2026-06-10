@@ -1,21 +1,11 @@
 source_id: calendar_sports_example
+display_name: Sports Calendar
+description: Example sports schedule source.
+domain_tags:
+  - calendar
+  - sports
 connector: ics_calendar
 enabled: true
-
-public_profile:
-  display_name: Sports Calendar
-  description: Example sports schedule source.
-  domain_tags:
-    - calendar
-    - sports
-
-private_profile:
-  display_name: Sports Team Calendar
-  description: Private operator details for a specific subscribed sports calendar.
-  domain_tags:
-    - hockey
-    - sports_team
-    - schedule
 
 sensitivity: low
 access_mode: read_only
@@ -37,6 +27,6 @@ result_text:
   title_from: summary
   include_fields:
     - summary
-    - dtstart
-    - dtend
+    - start
+    - end
     - location

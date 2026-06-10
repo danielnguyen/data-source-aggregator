@@ -219,7 +219,7 @@ class IcsCalendarConnector:
             result_id=f"r_{uuid4().hex}",
             source_type="ics_calendar",
             source_id=source_config.source_id,
-            source_name=source_config.public_display_name,
+            source_name=source_config.display_name,
             source_ref=build_ics_calendar_source_ref(source_config.source_id, event.uid),
             retrieved_at=self._now_factory(),
             source_modified_at=event.last_modified,

@@ -49,16 +49,11 @@ async def test_sources_routes_return_safe_registry_entries(
     (source_dir / "source.yaml").write_text(
         """
 source_id: vehicle_log_primary
+display_name: Vehicle Log - Primary
+description: Personal vehicle operating records.
+domain_tags: [vehicle, maintenance]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log - Primary
-  description: Personal vehicle operating records.
-  domain_tags: [vehicle, maintenance]
-private_profile:
-  display_name: Primary Vehicle Logs
-  description: Fuel, cost, repair, odometer, shop, and ownership logs.
-  domain_tags: [vehicle_detail, fuel, ownership_cost, odometer]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -90,10 +85,7 @@ retrieval:
     assert payload["sources"][0]["status"] == "ready"
     assert payload["sources"][0]["capabilities"] == ["profile", "search", "fetch", "context"]
     assert "connector_config" not in payload["sources"][0]
-    assert "private_profile" not in payload["sources"][0]
     assert "sheet-secret-id" not in str(payload)
-    assert "Primary Vehicle Logs" not in str(payload)
-    assert "ownership_cost" not in str(payload)
 
     assert detail_response.status_code == 200
     detail_payload = detail_response.json()
@@ -104,9 +96,7 @@ retrieval:
         detail_payload["source"]["profile"]["summary"]
         == "Google Sheets source with read-only row and range retrieval."
     )
-    assert "private_profile" not in detail_payload["source"]
     assert "sheet-secret-id" not in str(detail_payload)
-    assert "Primary Vehicle Logs" not in str(detail_payload)
 
 
 @pytest.mark.anyio

@@ -78,14 +78,6 @@ For readiness, treat the service as ready when both of these are true:
 
 If source config or credential refs are invalid, startup should fail rather than silently serving a broken configuration.
 
-## Source metadata privacy
-
-`source_id`, public display name, public description, and public domain tags are API-visible metadata. Treat them as safe-to-expose values.
-
-Use `public_profile` for safe metadata and `private_profile` only for local operator clarity. Do not put private facts in `source_id`, `public_profile`, or committed local config files.
-
-Spreadsheet IDs, private ICS URLs, credential refs, credential paths, tokens, and service-account file paths are sensitive config. They must not appear in API responses or audit logs.
-
 ## Safety notes
 
 Mounted runtime data should remain outside the image. Do not place any of the following directly in `docker-compose.yml` or commit them into the repository:

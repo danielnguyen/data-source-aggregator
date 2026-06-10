@@ -8,18 +8,11 @@ def test_build_source_registry_exposes_safe_fields_only() -> None:
     source_config = SourceConfig.model_validate(
         {
             "source_id": "vehicle_log_primary",
+            "display_name": "Vehicle Log - Primary",
+            "description": "Personal vehicle operating records.",
+            "domain_tags": ["vehicle", "maintenance"],
             "connector": "google_sheets",
             "enabled": True,
-            "public_profile": {
-                "display_name": "Vehicle Log - Primary",
-                "description": "Personal vehicle operating records.",
-                "domain_tags": ["vehicle", "maintenance"],
-            },
-            "private_profile": {
-                "display_name": "Primary Vehicle Logs",
-                "description": "Private operator description.",
-                "domain_tags": ["vehicle_detail", "ownership_cost"],
-            },
             "sensitivity": "low",
             "access_mode": "read_only",
             "connector_config": {
@@ -49,25 +42,17 @@ def test_build_source_registry_exposes_safe_fields_only() -> None:
     assert dumped["capabilities"] == ["profile", "search", "fetch", "context"]
     assert "connector_config" not in dumped
     assert "sheet-secret-id" not in str(dumped)
-    assert "Primary Vehicle Logs" not in str(dumped)
 
 
 def test_registry_detail_includes_safe_profile_and_retrieval() -> None:
     source_config = SourceConfig.model_validate(
         {
             "source_id": "calendar_sports",
+            "display_name": "Sports Calendar",
+            "description": "Sports schedule source.",
+            "domain_tags": ["calendar", "sports"],
             "connector": "ics_calendar",
             "enabled": True,
-            "public_profile": {
-                "display_name": "Sports Calendar",
-                "description": "Sports schedule source.",
-                "domain_tags": ["calendar", "sports"],
-            },
-            "private_profile": {
-                "display_name": "Sports Team Calendar",
-                "description": "Private subscribed feed.",
-                "domain_tags": ["sports", "sports_team"],
-            },
             "sensitivity": "low",
             "access_mode": "read_only",
             "connector_config": {

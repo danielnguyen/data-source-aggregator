@@ -66,17 +66,10 @@ class FakeIcsCalendarClient(IcsCalendarClient):
 def ics_source_config(source_config_factory):
     return source_config_factory(
         source_id="calendar_sports",
+        display_name="Sports Calendar",
+        description="Sports schedule source.",
+        domain_tags=["calendar", "sports"],
         connector="ics_calendar",
-        public_profile={
-            "display_name": "Sports Calendar",
-            "description": "Sports schedule source.",
-            "domain_tags": ["calendar", "sports"],
-        },
-        private_profile={
-            "display_name": "Sports Team Calendar",
-            "description": "Private subscribed sports feed.",
-            "domain_tags": ["sports", "hockey", "sports_team"],
-        },
         connector_config={
             "url": "https://private.example.test/sports-calendar.ics",
             "timezone": "America/Toronto",
@@ -376,16 +369,11 @@ def _write_ics_source_config(source_dir: Path) -> None:
     (source_dir / "calendar_sports.yaml").write_text(
         """
 source_id: calendar_sports
+display_name: Sports Calendar
+description: Sports schedule source.
+domain_tags: [calendar, sports]
 connector: ics_calendar
 enabled: true
-public_profile:
-  display_name: Sports Calendar
-  description: Sports schedule source.
-  domain_tags: [calendar, sports]
-private_profile:
-  display_name: Sports Team Calendar
-  description: Private subscribed sports feed.
-  domain_tags: [sports, hockey, sports_team]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -451,10 +439,8 @@ async def test_search_route_and_audit_do_not_expose_ics_url(
     assert payload["results"][0]["title"] == "Sports Team vs Rivals"
     assert payload["results"][0]["source_name"] == "Sports Calendar"
     assert "private.example.test" not in json.dumps(payload)
-    assert "Sports Team Calendar" not in json.dumps(payload)
 
     audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
     assert audit_event["operation"] == "search"
     assert audit_event["status"] == "success"
     assert "private.example.test" not in json.dumps(audit_event)
-    assert "Sports Team Calendar" not in json.dumps(audit_event)

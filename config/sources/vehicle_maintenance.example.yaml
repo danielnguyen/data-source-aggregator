@@ -1,21 +1,11 @@
 source_id: vehicle_log_example
+display_name: Vehicle Log
+description: Example vehicle maintenance and operating records.
+domain_tags:
+  - vehicle
+  - maintenance
 connector: google_sheets
 enabled: true
-
-public_profile:
-  display_name: Vehicle Log
-  description: Example vehicle maintenance and operating records.
-  domain_tags:
-    - vehicle
-    - maintenance
-
-private_profile:
-  display_name: Example Vehicle Maintenance Log
-  description: Private operator notes for a specific vehicle sheet.
-  domain_tags:
-    - vehicle
-    - ownership_cost
-    - odometer
 
 sensitivity: medium
 access_mode: read_only

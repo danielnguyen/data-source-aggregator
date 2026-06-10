@@ -17,16 +17,11 @@ def _write_source_config(source_dir: Path) -> None:
     (source_dir / "source.yaml").write_text(
         """
 source_id: vehicle_log_primary
+display_name: Vehicle Log - Primary
+description: Personal vehicle operating records.
+domain_tags: [vehicle, maintenance]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log - Primary
-  description: Personal vehicle operating records.
-  domain_tags: [vehicle, maintenance]
-private_profile:
-  display_name: Primary Vehicle Logs
-  description: Fuel, cost, repair, odometer, shop, and ownership logs.
-  domain_tags: [vehicle_detail, fuel, ownership_cost, odometer]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -173,8 +168,6 @@ async def test_search_route_returns_empty_stub_results_and_writes_audit(
     assert audit_event["result_count"] == 0
     assert "sheet-secret-id" not in json.dumps(audit_event)
     assert "google_sheets_readonly" not in json.dumps(audit_event)
-    assert "Primary Vehicle Logs" not in json.dumps(audit_event)
-    assert "ownership_cost" not in json.dumps(audit_event)
 
 
 @pytest.mark.anyio

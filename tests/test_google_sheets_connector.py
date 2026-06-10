@@ -30,16 +30,9 @@ class FakeGoogleSheetsClient(GoogleSheetsClient):
 def google_sheets_source_config(source_config_factory):
     return source_config_factory(
         source_id="vehicle_log_primary",
-        public_profile={
-            "display_name": "Vehicle Log - Primary",
-            "description": "Personal vehicle operating records.",
-            "domain_tags": ["vehicle", "maintenance"],
-        },
-        private_profile={
-            "display_name": "Primary Vehicle Logs",
-            "description": "Private operator description.",
-            "domain_tags": ["vehicle_detail", "ownership_cost"],
-        },
+        display_name="Vehicle Log - Primary",
+        description="Personal vehicle operating records.",
+        domain_tags=["vehicle", "maintenance"],
         connector_config={
             "spreadsheet_id": "sheet-id",
             "worksheet": "Maintenance",

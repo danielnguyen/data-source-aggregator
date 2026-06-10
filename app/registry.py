@@ -81,9 +81,9 @@ def build_source_registry(source_configs: list[SourceConfig]) -> SourceRegistry:
         entries.append(
             SourceRegistryDetail(
                 source_id=source_config.source_id,
-                display_name=source_config.public_display_name,
+                display_name=source_config.display_name,
                 connector=source_config.connector,
-                domain_tags=source_config.public_domain_tags,
+                domain_tags=source_config.domain_tags,
                 sensitivity=source_config.sensitivity,
                 access_mode=source_config.access_mode,
                 capabilities=capabilities,

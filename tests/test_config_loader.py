@@ -29,16 +29,11 @@ credentials:
     (source_dir / "source.yaml").write_text(
         """
 source_id: vehicle_log_primary
+display_name: Vehicle Log - Primary
+description: Personal vehicle operating records.
+domain_tags: [vehicle, maintenance]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log - Primary
-  description: Personal vehicle operating records.
-  domain_tags: [vehicle, maintenance]
-private_profile:
-  display_name: Example Private Vehicle Log
-  description: Private operator notes for a configured vehicle sheet.
-  domain_tags: [vehicle_detail, operator_only]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -69,16 +64,11 @@ def test_example_yaml_source_configs_are_ignored(tmp_path: Path) -> None:
     (source_dir / "vehicle_maintenance.example.yaml").write_text(
         """
 source_id: vehicle_log_example
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log
-  description: Example vehicle records.
-  domain_tags: [vehicle]
-private_profile:
-  display_name: Example Private Vehicle Log
-  description: Private operator notes for a configured vehicle sheet.
-  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -107,16 +97,11 @@ def test_example_yml_source_configs_are_ignored(tmp_path: Path) -> None:
     (source_dir / "vehicle_maintenance.example.yml").write_text(
         """
 source_id: vehicle_log_example
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log
-  description: Example vehicle records.
-  domain_tags: [vehicle]
-private_profile:
-  display_name: Example Private Vehicle Log
-  description: Private operator notes for a configured vehicle sheet.
-  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -159,16 +144,11 @@ credentials:
     (source_dir / "vehicle_log_primary.yaml").write_text(
         """
 source_id: vehicle_log_primary
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log
-  description: Example vehicle records.
-  domain_tags: [vehicle]
-private_profile:
-  display_name: Example Private Vehicle Log
-  description: Private operator notes for a configured vehicle sheet.
-  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -192,7 +172,7 @@ retrieval:
     assert configs[0].source_id == "vehicle_log_primary"
 
 
-def test_source_config_with_public_and_private_profiles_uses_public_metadata(
+def test_source_config_with_top_level_metadata_loads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -212,16 +192,11 @@ credentials:
     (source_dir / "vehicle_log_primary.yaml").write_text(
         """
 source_id: vehicle_log_primary
+display_name: Vehicle Log - Primary
+description: Personal vehicle operating records.
+domain_tags: [vehicle, maintenance]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log - Primary
-  description: Personal vehicle operating records.
-  domain_tags: [vehicle, maintenance]
-private_profile:
-  display_name: Primary Vehicle Logs
-  description: Fuel, cost, repair, odometer, shop, and ownership logs.
-  domain_tags: [vehicle_detail, fuel, ownership_cost, odometer]
 sensitivity: medium
 access_mode: read_only
 connector_config:
@@ -242,13 +217,11 @@ retrieval:
     configs = load_source_configs(source_dir)
 
     assert len(configs) == 1
-    assert configs[0].public_display_name == "Vehicle Log - Primary"
-    assert configs[0].public_domain_tags == ["vehicle", "maintenance"]
-    assert configs[0].private_profile is not None
-    assert configs[0].private_profile.display_name == "Primary Vehicle Logs"
+    assert configs[0].display_name == "Vehicle Log - Primary"
+    assert configs[0].domain_tags == ["vehicle", "maintenance"]
 
 
-def test_config_missing_public_profile_fails_loudly(
+def test_config_missing_display_name_fails_loudly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -270,10 +243,8 @@ credentials:
 source_id: vehicle_log_primary
 connector: google_sheets
 enabled: true
-private_profile:
-  display_name: Example Private Vehicle Log
-  description: Private operator notes for a configured vehicle sheet.
-  domain_tags: [vehicle_detail]
+description: Example vehicle records.
+domain_tags: [vehicle]
 sensitivity: medium
 access_mode: read_only
 connector_config:
@@ -314,16 +285,11 @@ credentials:
     source_dir.mkdir()
     source_payload = """
 source_id: vehicle_log_example
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log
-  description: Example vehicle records.
-  domain_tags: [vehicle]
-private_profile:
-  display_name: Example Private Vehicle Log
-  description: Private operator notes for a configured vehicle sheet.
-  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -359,16 +325,11 @@ def test_invalid_enabled_source_config_fails_loudly(tmp_path: Path) -> None:
     (source_dir / "invalid.yaml").write_text(
         """
 source_id: Invalid Source Id
+display_name: Invalid
+description: Invalid test config.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Invalid
-  description: Invalid test config.
-  domain_tags: [vehicle]
-private_profile:
-  display_name: Invalid Private
-  description: Invalid test config.
-  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -397,16 +358,11 @@ def test_invalid_disabled_source_config_is_ignored_with_warning(
     (source_dir / "invalid-disabled.yaml").write_text(
         """
 source_id: Invalid Source Id
+display_name: Invalid
+description: Invalid test config.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: false
-public_profile:
-  display_name: Invalid
-  description: Invalid test config.
-  domain_tags: [vehicle]
-private_profile:
-  display_name: Invalid Private
-  description: Invalid test config.
-  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -448,16 +404,11 @@ credentials:
     (source_dir / "missing-env.yaml").write_text(
         """
 source_id: vehicle_log_primary
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log
-  description: Example vehicle records.
-  domain_tags: [vehicle]
-private_profile:
-  display_name: Example Private Vehicle Log
-  description: Private operator notes for a configured vehicle sheet.
-  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -488,16 +439,11 @@ def test_disabled_config_with_missing_env_var_is_ignored_with_warning(
     (source_dir / "missing-env-disabled.yaml").write_text(
         """
 source_id: calendar_sports
+display_name: Sports Calendar
+description: Example sports schedule source.
+domain_tags: [calendar, sports]
 connector: ics_calendar
 enabled: false
-public_profile:
-  display_name: Sports Calendar
-  description: Example sports schedule source.
-  domain_tags: [calendar, sports]
-private_profile:
-  display_name: Example Private Sports Calendar
-  description: Private operator notes for a subscribed sports feed.
-  domain_tags: [sports_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -543,16 +489,11 @@ credentials:
     (source_dir / "source.yaml").write_text(
         """
 source_id: vehicle_log_primary
+display_name: Vehicle Log - Primary
+description: Personal vehicle operating records.
+domain_tags: [vehicle, maintenance]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log - Primary
-  description: Personal vehicle operating records.
-  domain_tags: [vehicle, maintenance]
-private_profile:
-  display_name: Example Private Vehicle Log
-  description: Private operator notes for a configured vehicle sheet.
-  domain_tags: [vehicle_detail, operator_only]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -594,16 +535,11 @@ def test_invalid_shared_fields_fail_validation(
     source_dir.mkdir()
     yaml_text = """
 source_id: vehicle_log_primary
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-public_profile:
-  display_name: Vehicle Log
-  description: Example vehicle records.
-  domain_tags: [vehicle]
-private_profile:
-  display_name: Example Private Vehicle Log
-  description: Private operator notes for a configured vehicle sheet.
-  domain_tags: [vehicle_detail]
 sensitivity: low
 access_mode: read_only
 connector_config:
