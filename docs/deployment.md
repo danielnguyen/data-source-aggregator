@@ -103,6 +103,12 @@ For readiness, treat the service as ready when both of these are true:
 1. `GET /health` returns `200 OK`.
 2. `GET /v1/sources` returns the sources you intended to mount.
 
+`GET /v1/sources` also reports connector reachability for each configured source:
+
+- `ready`: the source is enabled and the connector health check passed.
+- `unavailable`: the source is enabled but remote access failed.
+- `disabled`: the source is configured but disabled.
+
 If source config or credential refs are invalid, startup should fail rather than silently serving a broken configuration.
 
 ## Safety notes

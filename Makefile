@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 
 COMPOSE_FILE := docker-compose.yml
-APP_PORT ?= 5174
+APP_PORT ?= 8000
 
 .PHONY: dev-up dev-down dev-reset dev-logs dev-test dev-lint dev-check dev-install dev-start dev-start-reload dev-smoke dev-prepare dev-compose-config
 

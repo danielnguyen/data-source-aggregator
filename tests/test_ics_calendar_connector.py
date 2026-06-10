@@ -62,6 +62,12 @@ class FakeIcsCalendarClient(IcsCalendarClient):
         return self.payload
 
 
+class FakeIcsHttpError(Exception):
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 @pytest.fixture
 def ics_source_config(source_config_factory):
     return source_config_factory(
@@ -100,6 +106,50 @@ def test_google_sheets_still_returns_real_connector() -> None:
     connector = get_connector("google_sheets")
 
     assert isinstance(connector, GoogleSheetsConnector)
+
+
+@pytest.mark.anyio
+async def test_ics_health_returns_ready_for_readable_feed(ics_source_config) -> None:
+    connector = IcsCalendarConnector(
+        client_factory=lambda _: FakeIcsCalendarClient(FIXTURE_ICS_TEXT),
+    )
+
+    health = await connector.check_health(ics_source_config)
+
+    assert health.status.value == "ready"
+    assert health.last_error is None
+
+
+@pytest.mark.anyio
+async def test_ics_health_returns_unavailable_for_fetch_failure_without_url_leak(
+    ics_source_config,
+) -> None:
+    connector = IcsCalendarConnector(
+        client_factory=lambda _: FakeIcsCalendarClient("", should_fail=True),
+    )
+
+    health = await connector.check_health(ics_source_config)
+
+    assert health.status.value == "unavailable"
+    assert health.last_error == "source_unavailable"
+    assert "private.example.test" not in health.model_dump_json()
+
+
+@pytest.mark.anyio
+async def test_ics_health_returns_permission_denied_without_url_leak(
+    ics_source_config,
+) -> None:
+    class FailingClient(IcsCalendarClient):
+        def get_text(self, url: str) -> str:
+            raise FakeIcsHttpError(403, f"forbidden {url}")
+
+    connector = IcsCalendarConnector(client_factory=lambda _: FailingClient())
+
+    health = await connector.check_health(ics_source_config)
+
+    assert health.status.value == "unavailable"
+    assert health.last_error == "permission_denied"
+    assert "private.example.test" not in health.model_dump_json()
 
 
 def test_parse_ics_calendar_source_ref_round_trips_uid() -> None:

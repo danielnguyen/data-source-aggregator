@@ -5,7 +5,9 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.connectors import base as connector_base
 from app.main import create_app
+from app.models import SourceHealth, SourceStatus
 
 
 def _write_credentials_config(tmp_path: Path, monkeypatch) -> None:
@@ -43,6 +45,19 @@ async def test_sources_routes_return_safe_registry_entries(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    class FakeHealthyGoogleSheetsConnector:
+        async def check_health(self, source_config):
+            return SourceHealth(
+                status=SourceStatus.READY,
+                last_checked_at="2026-06-10T00:00:00Z",
+                last_error=None,
+            )
+
+    monkeypatch.setitem(
+        connector_base.CONNECTOR_FACTORIES,
+        "google_sheets",
+        lambda: FakeHealthyGoogleSheetsConnector(),
+    )
     _write_credentials_config(tmp_path, monkeypatch)
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
@@ -83,6 +98,8 @@ retrieval:
     assert payload["sources"][0]["display_name"] == "Vehicle Log - Primary"
     assert payload["sources"][0]["domain_tags"] == ["vehicle", "maintenance"]
     assert payload["sources"][0]["status"] == "ready"
+    assert payload["sources"][0]["last_checked_at"] == "2026-06-10T00:00:00Z"
+    assert payload["sources"][0]["last_error"] is None
     assert payload["sources"][0]["capabilities"] == ["profile", "search", "fetch", "context"]
     assert "connector_config" not in payload["sources"][0]
     assert "sheet-secret-id" not in str(payload)
@@ -92,11 +109,70 @@ retrieval:
     assert detail_payload["source"]["retrieval"]["default_mode"] == "targeted"
     assert detail_payload["source"]["display_name"] == "Vehicle Log - Primary"
     assert detail_payload["source"]["domain_tags"] == ["vehicle", "maintenance"]
+    assert detail_payload["source"]["status"] == "ready"
+    assert detail_payload["source"]["last_checked_at"] == "2026-06-10T00:00:00Z"
+    assert detail_payload["source"]["last_error"] is None
     assert (
         detail_payload["source"]["profile"]["summary"]
         == "Google Sheets source with read-only row and range retrieval."
     )
     assert "sheet-secret-id" not in str(detail_payload)
+
+
+@pytest.mark.anyio
+async def test_sources_route_reports_unavailable_without_leaking_private_details(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeUnavailableIcsConnector:
+        async def check_health(self, source_config):
+            return SourceHealth(
+                status=SourceStatus.UNAVAILABLE,
+                last_checked_at="2026-06-10T00:00:00Z",
+                last_error="source_unavailable",
+            )
+
+    monkeypatch.setitem(
+        connector_base.CONNECTOR_FACTORIES,
+        "ics_calendar",
+        lambda: FakeUnavailableIcsConnector(),
+    )
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "calendar.yaml").write_text(
+        """
+source_id: calendar_sports
+display_name: Sports Calendar
+description: Sports schedule source.
+domain_tags: [calendar, sports]
+connector: ics_calendar
+enabled: true
+sensitivity: low
+access_mode: read_only
+connector_config:
+  url: https://private.example.test/sports-calendar.ics
+  timezone: America/Toronto
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  lookback_days: 30
+  lookahead_days: 365
+  allow_full_fetch: true
+""",
+        encoding="utf-8",
+    )
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/sources")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sources"][0]["status"] == "unavailable"
+    assert payload["sources"][0]["last_error"] == "source_unavailable"
+    assert "private.example.test" not in str(payload)
 
 
 @pytest.mark.anyio
