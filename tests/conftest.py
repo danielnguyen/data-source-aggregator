@@ -9,11 +9,12 @@ from app.models import SourceConfig
 def source_config_factory():
     def build_source_config(**overrides):
         payload = {
-            "source_id": "jeep_wj_maintenance",
-            "display_name": "Jeep WJ Maintenance Log",
+            "source_id": "vehicle_log_primary",
+            "display_name": "Vehicle Log - Primary",
+            "description": "Personal vehicle operating records.",
+            "domain_tags": ["vehicle", "maintenance"],
             "connector": "google_sheets",
             "enabled": True,
-            "domain_tags": ["vehicle", "maintenance"],
             "sensitivity": "low",
             "access_mode": "read_only",
             "connector_config": {

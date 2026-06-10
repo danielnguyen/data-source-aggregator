@@ -48,12 +48,12 @@ async def test_sources_routes_return_safe_registry_entries(
     source_dir.mkdir()
     (source_dir / "source.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
+display_name: Vehicle Log - Primary
+description: Personal vehicle operating records.
+domain_tags: [vehicle, maintenance]
 connector: google_sheets
 enabled: true
-description: Maintenance records for the Jeep WJ.
-domain_tags: [vehicle, maintenance, jeep_wj]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -75,11 +75,13 @@ retrieval:
     transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         list_response = await client.get("/v1/sources")
-        detail_response = await client.get("/v1/sources/jeep_wj_maintenance")
+        detail_response = await client.get("/v1/sources/vehicle_log_primary")
 
     assert list_response.status_code == 200
     payload = list_response.json()
-    assert payload["sources"][0]["source_id"] == "jeep_wj_maintenance"
+    assert payload["sources"][0]["source_id"] == "vehicle_log_primary"
+    assert payload["sources"][0]["display_name"] == "Vehicle Log - Primary"
+    assert payload["sources"][0]["domain_tags"] == ["vehicle", "maintenance"]
     assert payload["sources"][0]["status"] == "ready"
     assert payload["sources"][0]["capabilities"] == ["profile", "search", "fetch", "context"]
     assert "connector_config" not in payload["sources"][0]
@@ -88,9 +90,11 @@ retrieval:
     assert detail_response.status_code == 200
     detail_payload = detail_response.json()
     assert detail_payload["source"]["retrieval"]["default_mode"] == "targeted"
+    assert detail_payload["source"]["display_name"] == "Vehicle Log - Primary"
+    assert detail_payload["source"]["domain_tags"] == ["vehicle", "maintenance"]
     assert (
         detail_payload["source"]["profile"]["summary"]
-        == "Google Sheet source using worksheet Maintenance."
+        == "Google Sheets source with read-only row and range retrieval."
     )
     assert "sheet-secret-id" not in str(detail_payload)
 

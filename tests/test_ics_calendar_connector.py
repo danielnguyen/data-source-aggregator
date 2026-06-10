@@ -23,27 +23,27 @@ FIXTURE_ICS_TEXT = """BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//DSA Test//EN
 BEGIN:VEVENT
-UID:leafs-habs-20261010
+UID:sports-team-home-20261010
 DTSTART:20261010T190000Z
 DTEND:20261010T220000Z
-SUMMARY:Maple Leafs vs Canadiens
+SUMMARY:Sports Team vs Rivals
 LOCATION:Scotiabank Arena
 DESCRIPTION:Regular season game
 LAST-MODIFIED:20260601T120000Z
 END:VEVENT
 BEGIN:VEVENT
-UID:leafs-bruins-20261012
+UID:sports-team-away-20261012
 DTSTART:20261012T190000Z
 DTEND:20261012T220000Z
-SUMMARY:Maple Leafs vs Bruins
+SUMMARY:Sports Team vs Away Opponent
 LOCATION:TD Garden
 DESCRIPTION:Away game
 END:VEVENT
 BEGIN:VEVENT
-UID:leafs-practice-20260501
+UID:sports-team-practice-20260501
 DTSTART:20260501T150000Z
 DTEND:20260501T170000Z
-SUMMARY:Leafs practice
+SUMMARY:Sports Team practice
 LOCATION:Ford Performance Centre
 DESCRIPTION:Past practice session
 END:VEVENT
@@ -65,12 +65,13 @@ class FakeIcsCalendarClient(IcsCalendarClient):
 @pytest.fixture
 def ics_source_config(source_config_factory):
     return source_config_factory(
-        source_id="leafs_calendar",
-        display_name="Toronto Maple Leafs Calendar",
+        source_id="calendar_sports",
+        display_name="Sports Calendar",
+        description="Sports schedule source.",
+        domain_tags=["calendar", "sports"],
         connector="ics_calendar",
-        domain_tags=["sports", "hockey", "leafs"],
         connector_config={
-            "url": "https://private.example.test/leafs.ics",
+            "url": "https://private.example.test/sports-calendar.ics",
             "timezone": "America/Toronto",
         },
         result_text={
@@ -102,12 +103,12 @@ def test_google_sheets_still_returns_real_connector() -> None:
 
 
 def test_parse_ics_calendar_source_ref_round_trips_uid() -> None:
-    source_ref = build_ics_calendar_source_ref("leafs_calendar", "leafs/habs:20261010")
+    source_ref = build_ics_calendar_source_ref("calendar_sports", "sports/team:20261010")
 
     parsed = parse_ics_calendar_source_ref(source_ref)
 
-    assert parsed.source_id == "leafs_calendar"
-    assert parsed.uid == "leafs/habs:20261010"
+    assert parsed.source_id == "calendar_sports"
+    assert parsed.uid == "sports/team:20261010"
 
 
 @pytest.mark.anyio
@@ -118,15 +119,16 @@ async def test_search_returns_matching_events_from_fake_ics_text(ics_source_conf
     )
 
     results = await connector.search(
-        SearchRequest(query="maple leafs canadiens", include_raw=True),
+        SearchRequest(query="sports team rivals", include_raw=True),
         ics_source_config,
     )
 
     assert len(results) == 2
-    assert results[0].title == "Maple Leafs vs Canadiens"
-    assert results[0].source_ref == "ics_calendar:leafs_calendar:event:leafs-habs-20261010"
+    assert results[0].title == "Sports Team vs Rivals"
+    assert results[0].source_ref == "ics_calendar:calendar_sports:event:sports-team-home-20261010"
     assert results[0].content_type == "calendar_event"
     assert results[0].confidence.value == "high"
+    assert results[0].source_name == "Sports Calendar"
 
 
 @pytest.mark.anyio
@@ -151,12 +153,12 @@ async def test_search_honors_max_results_and_ranking(ics_source_config) -> None:
     )
 
     results = await connector.search(
-        SearchRequest(query="away game maple leafs", max_results=1, include_raw=True),
+        SearchRequest(query="away game sports team", max_results=1, include_raw=True),
         ics_source_config,
     )
 
     assert len(results) == 1
-    assert results[0].title == "Maple Leafs vs Bruins"
+    assert results[0].title == "Sports Team vs Away Opponent"
 
 
 @pytest.mark.anyio
@@ -182,12 +184,12 @@ async def test_result_text_renders_configured_include_fields(ics_source_config) 
     )
 
     results = await connector.search(
-        SearchRequest(query="canadiens", include_raw=True),
+        SearchRequest(query="rivals", include_raw=True),
         ics_source_config,
     )
 
     assert results[0].text == (
-        "summary: Maple Leafs vs Canadiens\n"
+        "summary: Sports Team vs Rivals\n"
         "start: 2026-10-10T19:00:00+00:00\n"
         "end: 2026-10-10T22:00:00+00:00\n"
         "location: Scotiabank Arena\n"
@@ -202,7 +204,7 @@ async def test_raw_is_omitted_when_include_raw_false(ics_source_config) -> None:
     )
 
     results = await connector.search(
-        SearchRequest(query="canadiens", include_raw=False),
+        SearchRequest(query="rivals", include_raw=False),
         ics_source_config,
     )
 
@@ -216,12 +218,12 @@ async def test_raw_is_included_when_include_raw_true_without_url(ics_source_conf
     )
 
     results = await connector.search(
-        SearchRequest(query="canadiens", include_raw=True),
+        SearchRequest(query="rivals", include_raw=True),
         ics_source_config,
     )
 
     assert results[0].raw is not None
-    assert results[0].raw["uid"] == "leafs-habs-20261010"
+    assert results[0].raw["uid"] == "sports-team-home-20261010"
     assert "url" not in results[0].raw
     assert "private.example.test" not in str(results[0].raw)
 
@@ -234,7 +236,7 @@ async def test_fetch_by_valid_event_source_ref_returns_expected_event(ics_source
 
     results = await connector.fetch(
         FetchRequest(
-            source_ref="ics_calendar:leafs_calendar:event:leafs-habs-20261010",
+            source_ref="ics_calendar:calendar_sports:event:sports-team-home-20261010",
             include_raw=True,
             budget={"max_bytes": 100000},
         ),
@@ -242,7 +244,8 @@ async def test_fetch_by_valid_event_source_ref_returns_expected_event(ics_source
     )
 
     assert len(results) == 1
-    assert results[0].title == "Maple Leafs vs Canadiens"
+    assert results[0].title == "Sports Team vs Rivals"
+    assert results[0].source_name == "Sports Calendar"
 
 
 @pytest.mark.anyio
@@ -254,7 +257,7 @@ async def test_fetch_by_malformed_source_ref_returns_invalid_source_ref(ics_sour
     with pytest.raises(ServiceError, match="invalid"):
         await connector.fetch(
             FetchRequest(
-                source_ref="ics_calendar:leafs_calendar:not-an-event",
+                source_ref="ics_calendar:calendar_sports:not-an-event",
                 include_raw=True,
                 budget={"max_bytes": 100000},
             ),
@@ -271,7 +274,7 @@ async def test_fetch_rejects_mismatched_source_id(ics_source_config) -> None:
     with pytest.raises(ServiceError) as error_info:
         await connector.fetch(
             FetchRequest(
-                source_ref="ics_calendar:other_source:event:leafs-habs-20261010",
+                source_ref="ics_calendar:other_source:event:sports-team-home-20261010",
                 include_raw=True,
                 budget={"max_bytes": 100000},
             ),
@@ -290,7 +293,7 @@ async def test_context_upcoming_events_returns_events_in_order(ics_source_config
 
     results = await connector.context(
         ContextRequest(
-            source_ref="ics_calendar:leafs_calendar:event:leafs-habs-20261010",
+            source_ref="ics_calendar:calendar_sports:event:sports-team-home-20261010",
             context_mode="upcoming_events",
             budget={"max_rows": 2, "max_bytes": 100000},
         ),
@@ -298,9 +301,10 @@ async def test_context_upcoming_events_returns_events_in_order(ics_source_config
     )
 
     assert [result.title for result in results] == [
-        "Maple Leafs vs Canadiens",
-        "Maple Leafs vs Bruins",
+        "Sports Team vs Rivals",
+        "Sports Team vs Away Opponent",
     ]
+    assert all(result.source_name == "Sports Calendar" for result in results)
     assert all(result.raw is None for result in results)
 
 
@@ -313,7 +317,7 @@ async def test_context_rejects_unknown_mode(ics_source_config) -> None:
     with pytest.raises(ServiceError, match="not supported"):
         await connector.context(
             ContextRequest(
-                source_ref="ics_calendar:leafs_calendar:event:leafs-habs-20261010",
+                source_ref="ics_calendar:calendar_sports:event:sports-team-home-20261010",
                 context_mode="nearby_events",
                 budget={"max_rows": 2, "max_bytes": 100000},
             ),
@@ -330,7 +334,7 @@ async def test_context_rejects_mismatched_source_id(ics_source_config) -> None:
     with pytest.raises(ServiceError) as error_info:
         await connector.context(
             ContextRequest(
-                source_ref="ics_calendar:other_source:event:leafs-habs-20261010",
+                source_ref="ics_calendar:other_source:event:sports-team-home-20261010",
                 context_mode="upcoming_events",
                 budget={"max_rows": 2, "max_bytes": 100000},
             ),
@@ -348,7 +352,7 @@ async def test_connector_error_does_not_expose_configured_url(ics_source_config)
 
     with pytest.raises(ServiceError) as error_info:
         await connector.search(
-            SearchRequest(query="leafs", include_raw=True),
+            SearchRequest(query="sports", include_raw=True),
             ics_source_config,
         )
 
@@ -358,22 +362,22 @@ async def test_connector_error_does_not_expose_configured_url(ics_source_config)
         "details": error_info.value.details,
     }
     assert "private.example.test" not in str(error_payload)
-    assert "leafs.ics" not in str(error_payload)
+    assert "sports-calendar.ics" not in str(error_payload)
 
 
 def _write_ics_source_config(source_dir: Path) -> None:
-    (source_dir / "leafs_calendar.yaml").write_text(
+    (source_dir / "calendar_sports.yaml").write_text(
         """
-source_id: leafs_calendar
-display_name: Toronto Maple Leafs Calendar
+source_id: calendar_sports
+display_name: Sports Calendar
+description: Sports schedule source.
+domain_tags: [calendar, sports]
 connector: ics_calendar
 enabled: true
-description: Leafs schedule feed.
-domain_tags: [sports, hockey, leafs]
 sensitivity: low
 access_mode: read_only
 connector_config:
-  url: https://private.example.test/leafs.ics
+  url: https://private.example.test/sports-calendar.ics
   timezone: America/Toronto
 retrieval:
   default_mode: targeted
@@ -417,8 +421,8 @@ async def test_search_route_and_audit_do_not_expose_ics_url(
         response = await client.post(
             "/v1/sources/search",
             json={
-                "query": "canadiens",
-                "source_ids": ["leafs_calendar"],
+                "query": "rivals",
+                "source_ids": ["calendar_sports"],
                 "retrieval_mode": "targeted",
                 "allowed_sensitivity": "low",
                 "budget": {
@@ -432,7 +436,8 @@ async def test_search_route_and_audit_do_not_expose_ics_url(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["results"][0]["title"] == "Maple Leafs vs Canadiens"
+    assert payload["results"][0]["title"] == "Sports Team vs Rivals"
+    assert payload["results"][0]["source_name"] == "Sports Calendar"
     assert "private.example.test" not in json.dumps(payload)
 
     audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())

@@ -64,10 +64,10 @@ class SourceConfig(BaseModel):
 
     source_id: str
     display_name: str = Field(min_length=1)
-    connector: str = Field(min_length=1)
-    enabled: bool
     description: str | None = None
     domain_tags: list[str] = Field(min_length=1)
+    connector: str = Field(min_length=1)
+    enabled: bool
     sensitivity: Sensitivity
     access_mode: AccessMode
     connector_config: dict[str, object]

@@ -28,11 +28,12 @@ credentials:
     source_dir.mkdir()
     (source_dir / "source.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
+display_name: Vehicle Log - Primary
+description: Personal vehicle operating records.
+domain_tags: [vehicle, maintenance]
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle, maintenance]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -60,13 +61,14 @@ retrieval:
 def test_example_yaml_source_configs_are_ignored(tmp_path: Path) -> None:
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
-    (source_dir / "jeep_wj_maintenance.example.yaml").write_text(
+    (source_dir / "vehicle_maintenance.example.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_example
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -92,13 +94,14 @@ retrieval:
 def test_example_yml_source_configs_are_ignored(tmp_path: Path) -> None:
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
-    (source_dir / "jeep_wj_maintenance.example.yml").write_text(
+    (source_dir / "vehicle_maintenance.example.yml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_example
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -138,13 +141,14 @@ credentials:
     monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
-    (source_dir / "jeep_wj_maintenance.yaml").write_text(
+    (source_dir / "vehicle_log_primary.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -165,7 +169,101 @@ retrieval:
     configs = load_source_configs(source_dir)
 
     assert len(configs) == 1
-    assert configs[0].source_id == "jeep_wj_maintenance"
+    assert configs[0].source_id == "vehicle_log_primary"
+
+
+def test_source_config_with_top_level_metadata_loads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials_path = tmp_path / "credentials.yaml"
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "vehicle_log_primary.yaml").write_text(
+        """
+source_id: vehicle_log_primary
+display_name: Vehicle Log - Primary
+description: Personal vehicle operating records.
+domain_tags: [vehicle, maintenance]
+connector: google_sheets
+enabled: true
+sensitivity: medium
+access_mode: read_only
+connector_config:
+  spreadsheet_id: sheet-id
+  worksheet: Maintenance
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+""",
+        encoding="utf-8",
+    )
+
+    configs = load_source_configs(source_dir)
+
+    assert len(configs) == 1
+    assert configs[0].display_name == "Vehicle Log - Primary"
+    assert configs[0].domain_tags == ["vehicle", "maintenance"]
+
+
+def test_config_missing_display_name_fails_loudly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials_path = tmp_path / "credentials.yaml"
+    credentials_path.write_text(
+        """
+credentials:
+  google_sheets_readonly:
+    type: google_service_account_file
+    path: secrets/google_sheets_readonly.json
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "invalid.yaml").write_text(
+        """
+source_id: vehicle_log_primary
+connector: google_sheets
+enabled: true
+description: Example vehicle records.
+domain_tags: [vehicle]
+sensitivity: medium
+access_mode: read_only
+connector_config:
+  spreadsheet_id: sheet-id
+  worksheet: Maintenance
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceConfigValidationError):
+        load_source_configs(source_dir)
 
 
 def test_active_copy_is_loaded_while_example_template_stays_ignored(
@@ -186,11 +284,12 @@ credentials:
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     source_payload = """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_example
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -205,11 +304,11 @@ retrieval:
   max_text_chars: 40000
   allow_full_fetch: true
 """
-    (source_dir / "jeep_wj_maintenance.example.yaml").write_text(
+    (source_dir / "vehicle_maintenance.example.yaml").write_text(
         source_payload,
         encoding="utf-8",
     )
-    (source_dir / "jeep_wj_maintenance.yaml").write_text(
+    (source_dir / "vehicle_log_example.yaml").write_text(
         source_payload,
         encoding="utf-8",
     )
@@ -217,7 +316,7 @@ retrieval:
     configs = load_source_configs(source_dir)
 
     assert len(configs) == 1
-    assert configs[0].source_id == "jeep_wj_maintenance"
+    assert configs[0].source_id == "vehicle_log_example"
 
 
 def test_invalid_enabled_source_config_fails_loudly(tmp_path: Path) -> None:
@@ -227,9 +326,10 @@ def test_invalid_enabled_source_config_fails_loudly(tmp_path: Path) -> None:
         """
 source_id: Invalid Source Id
 display_name: Invalid
+description: Invalid test config.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -259,9 +359,10 @@ def test_invalid_disabled_source_config_is_ignored_with_warning(
         """
 source_id: Invalid Source Id
 display_name: Invalid
+description: Invalid test config.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: false
-domain_tags: [vehicle]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -302,11 +403,12 @@ credentials:
     source_dir.mkdir()
     (source_dir / "missing-env.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -336,11 +438,12 @@ def test_disabled_config_with_missing_env_var_is_ignored_with_warning(
     source_dir.mkdir()
     (source_dir / "missing-env-disabled.yaml").write_text(
         """
-source_id: leafs_calendar
-display_name: Toronto Maple Leafs Calendar
+source_id: calendar_sports
+display_name: Sports Calendar
+description: Example sports schedule source.
+domain_tags: [calendar, sports]
 connector: ics_calendar
 enabled: false
-domain_tags: [sports]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -385,11 +488,12 @@ credentials:
     )
     (source_dir / "source.yaml").write_text(
         """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
+display_name: Vehicle Log - Primary
+description: Personal vehicle operating records.
+domain_tags: [vehicle, maintenance]
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle, maintenance]
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -430,11 +534,12 @@ def test_invalid_shared_fields_fail_validation(
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
     yaml_text = """
-source_id: jeep_wj_maintenance
-display_name: Jeep WJ Maintenance Log
+source_id: vehicle_log_primary
+display_name: Vehicle Log
+description: Example vehicle records.
+domain_tags: [vehicle]
 connector: google_sheets
 enabled: true
-domain_tags: [vehicle]
 sensitivity: low
 access_mode: read_only
 connector_config:

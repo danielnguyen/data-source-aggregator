@@ -30,14 +30,14 @@ If no non-example source config files are mounted yet, an empty list is expected
 
 ## Search Google Sheets source
 
-Run this only if `jeep_wj_maintenance.yaml` is present and valid:
+Run this only if `vehicle_log_primary.yaml` is present and valid:
 
 ```bash
 curl -X POST http://localhost:8000/v1/sources/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "battery",
-    "source_ids": ["jeep_wj_maintenance"],
+    "source_ids": ["vehicle_log_primary"],
     "retrieval_mode": "targeted",
     "allowed_sensitivity": "low",
     "budget": {
@@ -51,14 +51,14 @@ curl -X POST http://localhost:8000/v1/sources/search \
 
 ## Search ICS source
 
-Run this only if `leafs_calendar.yaml` is present and valid:
+Run this only if `calendar_sports.yaml` is present and valid:
 
 ```bash
 curl -X POST http://localhost:8000/v1/sources/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "leafs",
-    "source_ids": ["leafs_calendar"],
+    "source_ids": ["calendar_sports"],
     "retrieval_mode": "targeted",
     "allowed_sensitivity": "low",
     "budget": {

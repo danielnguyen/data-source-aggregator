@@ -1,21 +1,17 @@
-source_id: leafs_calendar
-display_name: Toronto Maple Leafs Calendar
+source_id: calendar_sports_example
+display_name: Sports Calendar
+description: Example sports schedule source.
+domain_tags:
+  - calendar
+  - sports
 connector: ics_calendar
 enabled: true
-
-description: Public or subscribed Toronto Maple Leafs schedule feed.
-
-domain_tags:
-  - sports
-  - hockey
-  - leafs
-  - schedule
 
 sensitivity: low
 access_mode: read_only
 
 connector_config:
-  url: "https://example.com/leafs.ics"
+  url: "https://example.com/sports-calendar.ics"
   timezone: America/Toronto
 
 retrieval:
@@ -31,6 +27,6 @@ result_text:
   title_from: summary
   include_fields:
     - summary
-    - dtstart
-    - dtend
+    - start
+    - end
     - location
