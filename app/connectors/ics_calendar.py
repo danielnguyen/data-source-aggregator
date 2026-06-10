@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
@@ -277,6 +278,12 @@ class IcsCalendarConnector:
     def _calendar_url(self, source_config: SourceConfig) -> str:
         url = source_config.connector_config.get("url")
         if not isinstance(url, str) or not url:
+            url_env = source_config.connector_config.get("url_env")
+            if isinstance(url_env, str) and url_env:
+                env_value = os.getenv(url_env)
+                if isinstance(env_value, str) and env_value:
+                    return env_value
+
             raise ServiceError(
                 "invalid_request",
                 "The configured ics_calendar source is missing url.",

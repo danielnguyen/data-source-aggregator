@@ -96,6 +96,34 @@ def ics_source_config(source_config_factory):
     )
 
 
+@pytest.fixture
+def ics_source_config_with_url_env(source_config_factory):
+    return source_config_factory(
+        source_id="calendar_sports",
+        display_name="Sports Calendar",
+        description="Sports schedule source.",
+        domain_tags=["calendar", "sports"],
+        connector="ics_calendar",
+        connector_config={
+            "url_env": "SPORTS_CALENDAR_ICS_URL",
+            "timezone": "America/Toronto",
+        },
+        result_text={
+            "title_from": "summary",
+            "include_fields": ["summary", "start", "end", "location", "description"],
+        },
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "lookback_days": 30,
+            "lookahead_days": 365,
+            "allow_full_fetch": True,
+        },
+    )
+
+
 def test_get_connector_returns_real_ics_calendar_connector() -> None:
     connector = get_connector("ics_calendar")
 
@@ -118,6 +146,42 @@ async def test_ics_health_returns_ready_for_readable_feed(ics_source_config) -> 
 
     assert health.status.value == "ready"
     assert health.last_error is None
+
+
+@pytest.mark.anyio
+async def test_ics_health_with_url_env_returns_ready_when_env_is_set(
+    ics_source_config_with_url_env,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "SPORTS_CALENDAR_ICS_URL",
+        "https://private.example.test/sports-calendar.ics",
+    )
+    connector = IcsCalendarConnector(
+        client_factory=lambda _: FakeIcsCalendarClient(FIXTURE_ICS_TEXT),
+    )
+
+    health = await connector.check_health(ics_source_config_with_url_env)
+
+    assert health.status.value == "ready"
+    assert health.last_error is None
+
+
+@pytest.mark.anyio
+async def test_ics_health_with_missing_url_env_returns_unavailable_without_url_leak(
+    ics_source_config_with_url_env,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("SPORTS_CALENDAR_ICS_URL", raising=False)
+    connector = IcsCalendarConnector(
+        client_factory=lambda _: FakeIcsCalendarClient(FIXTURE_ICS_TEXT),
+    )
+
+    health = await connector.check_health(ics_source_config_with_url_env)
+
+    assert health.status.value == "unavailable"
+    assert health.last_error == "connector_not_configured"
+    assert "private.example.test" not in health.model_dump_json()
 
 
 @pytest.mark.anyio
@@ -150,6 +214,29 @@ async def test_ics_health_returns_permission_denied_without_url_leak(
     assert health.status.value == "unavailable"
     assert health.last_error == "permission_denied"
     assert "private.example.test" not in health.model_dump_json()
+
+
+@pytest.mark.anyio
+async def test_search_with_url_env_works_when_env_is_set(
+    ics_source_config_with_url_env,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "SPORTS_CALENDAR_ICS_URL",
+        "https://private.example.test/sports-calendar.ics",
+    )
+    connector = IcsCalendarConnector(
+        client_factory=lambda _: FakeIcsCalendarClient(FIXTURE_ICS_TEXT),
+        now_factory=lambda: datetime(2026, 6, 9, tzinfo=UTC),
+    )
+
+    results = await connector.search(
+        SearchRequest(query="sports team rivals", include_raw=True),
+        ics_source_config_with_url_env,
+    )
+
+    assert len(results) == 2
+    assert results[0].title == "Sports Team vs Rivals"
 
 
 def test_parse_ics_calendar_source_ref_round_trips_uid() -> None:
