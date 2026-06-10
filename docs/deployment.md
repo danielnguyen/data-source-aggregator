@@ -45,11 +45,14 @@ Use public-safe names when copying examples into real local config files. `sourc
 
 ## Docker Compose
 
-The included [docker-compose.yml](../docker-compose.yml) mounts the whole `config/` directory read-only, mounts secrets read-only, and mounts the audit log directory writable:
+The included [docker-compose.yml](../docker-compose.yml) uses bind mounts by default:
 
-- `./config:/app/config:ro`
-- `./secrets:/app/secrets:ro`
-- `./var/audit:/app/var/audit`
+```yaml
+volumes:
+  - ./config:/app/config:ro
+  - ./secrets:/app/secrets:ro
+  - ./var/audit:/app/var/audit
+```
 
 The service-level environment is:
 
@@ -58,6 +61,30 @@ The service-level environment is:
 - `AUDIT_LOG_PATH=/app/var/audit/events.jsonl`
 
 This layout allows `/app/config/credentials.yaml` to be absent cleanly when no enabled source needs credentials. Source examples still remain inactive until copied to non-example filenames inside the mounted `config/sources/` directory.
+
+### Bind mounts
+
+Use bind mounts when you want to edit config files directly on the host. This is the simplest option for local development and small server deployments.
+
+### Named volumes
+
+Named volumes work well for Portainer-style deployments:
+
+```yaml
+services:
+  data-source-aggregator:
+    volumes:
+      - dsa_config:/app/config:ro
+      - dsa_secrets:/app/secrets:ro
+      - dsa_audit:/app/var/audit
+
+volumes:
+  dsa_config:
+  dsa_secrets:
+  dsa_audit:
+```
+
+Bind mounts are easier to edit from the host. Named volumes need a way to seed or update files, such as Portainer volume tools or a helper container.
 
 Bring the service up:
 
