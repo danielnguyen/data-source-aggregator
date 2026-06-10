@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 from app.connectors.google_sheets import GoogleSheetsConnector
 from app.connectors.ics_calendar import IcsCalendarConnector
 from app.errors import ServiceError, SourceConfigValidationError
-from app.models import ContextRequest, FetchRequest, ResultEnvelope, SearchRequest, SourceConfig
+from app.models import (
+    ContextRequest,
+    FetchRequest,
+    ResultEnvelope,
+    SearchRequest,
+    SourceConfig,
+    SourceHealth,
+    SourceStatus,
+)
 
 CONNECTOR_CAPABILITIES: dict[str, list[str]] = {
     "google_sheets": ["profile", "search", "fetch", "context"],
@@ -71,6 +80,13 @@ class StubConnector:
         source_config: SourceConfig,
     ) -> list[ResultEnvelope]:
         return []
+
+    async def check_health(self, source_config: SourceConfig) -> SourceHealth:
+        return SourceHealth(
+            status=SourceStatus.UNAVAILABLE,
+            last_checked_at=datetime.now(UTC),
+            last_error="connector_not_configured",
+        )
 
     async def fetch(
         self,

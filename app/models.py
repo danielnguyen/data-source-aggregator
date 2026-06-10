@@ -44,6 +44,12 @@ class AuditStatus(str, Enum):
     ERROR = "error"
 
 
+class SourceStatus(str, Enum):
+    READY = "ready"
+    UNAVAILABLE = "unavailable"
+    DISABLED = "disabled"
+
+
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "data-source-aggregator"
@@ -102,6 +108,12 @@ class SourceRegistryEntry(BaseModel):
     enabled: bool
     status: str
     last_checked_at: datetime | None
+    last_error: str | None = None
+
+
+class SourceHealth(BaseModel):
+    status: SourceStatus
+    last_checked_at: datetime
     last_error: str | None = None
 
 

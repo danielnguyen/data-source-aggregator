@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http import HTTPStatus
 from uuid import uuid4
 
 from app.credentials import (
@@ -21,6 +22,8 @@ from app.models import (
     ResultEnvelope,
     SearchRequest,
     SourceConfig,
+    SourceHealth,
+    SourceStatus,
 )
 from app.services.result_text import render_row_text
 from app.services.source_ref import parse_source_ref
@@ -100,6 +103,33 @@ class GoogleSheetsConnector:
         if request.max_results is not None:
             scored_rows = scored_rows[: request.max_results]
         return [result_envelope for _, _, result_envelope in scored_rows]
+
+    async def check_health(self, source_config: SourceConfig) -> SourceHealth:
+        checked_at = self._now_factory()
+        try:
+            client = self._client_factory(source_config)
+            client.get_values(
+                self._spreadsheet_id(source_config),
+                self._health_check_range(source_config),
+            )
+        except ServiceError as exc:
+            return SourceHealth(
+                status=SourceStatus.UNAVAILABLE,
+                last_checked_at=checked_at,
+                last_error=_map_google_health_service_error(exc),
+            )
+        except Exception as exc:
+            return SourceHealth(
+                status=SourceStatus.UNAVAILABLE,
+                last_checked_at=checked_at,
+                last_error=_map_google_health_exception(exc),
+            )
+
+        return SourceHealth(
+            status=SourceStatus.READY,
+            last_checked_at=checked_at,
+            last_error=None,
+        )
 
     async def fetch(
         self,
@@ -431,6 +461,11 @@ class GoogleSheetsConnector:
             )
         return header_row
 
+    def _health_check_range(self, source_config: SourceConfig) -> str:
+        worksheet = quote_worksheet_name(self._worksheet_name(source_config))
+        header_row = self._header_row(source_config)
+        return f"{worksheet}!A{header_row}:A{header_row}"
+
 
 @dataclass
 class ParsedGoogleSheetsSourceRef:
@@ -524,3 +559,45 @@ def _score_row(query: str, query_terms: list[str], haystack: str) -> int:
     if matched_terms:
         score += matched_terms
     return score
+
+
+def _map_google_health_service_error(error: ServiceError) -> str:
+    if error.code == "credentials_missing":
+        return "credentials_missing"
+    if error.code == "connector_error":
+        return "connector_not_configured"
+    if error.code == "invalid_request":
+        return "connector_not_configured"
+    return "source_unavailable"
+
+
+def _map_google_health_exception(error: Exception) -> str:
+    status_code = _extract_http_status_code(error)
+    if status_code == HTTPStatus.UNAUTHORIZED:
+        return "credentials_expired"
+    if status_code == HTTPStatus.FORBIDDEN:
+        return "permission_denied"
+    if status_code is not None:
+        return "source_unavailable"
+
+    message = str(error).lower()
+    if "expired" in message or "refresh" in message:
+        return "credentials_expired"
+    if "permission" in message or "forbidden" in message or "access denied" in message:
+        return "permission_denied"
+    if "credential" in message and ("missing" in message or "not found" in message):
+        return "credentials_missing"
+    return "source_unavailable"
+
+
+def _extract_http_status_code(error: Exception) -> int | None:
+    response = getattr(error, "resp", None)
+    status = getattr(response, "status", None)
+    if isinstance(status, int):
+        return status
+
+    status_code = getattr(error, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+
+    return None

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.connectors.base import capabilities_for_connector
+from app.connectors.base import capabilities_for_connector, get_connector
 from app.models import (
     Sensitivity,
     SourceConfig,
+    SourceHealth,
     SourceProfile,
     SourceRegistryDetail,
     SourceRegistryEntry,
+    SourceStatus,
 )
 
 
@@ -71,13 +73,12 @@ class SourceRegistry:
         return matched
 
 
-def build_source_registry(source_configs: list[SourceConfig]) -> SourceRegistry:
-    checked_at = datetime.now(UTC)
+async def build_source_registry(source_configs: list[SourceConfig]) -> SourceRegistry:
     entries: list[SourceRegistryDetail] = []
 
     for source_config in source_configs:
         capabilities = capabilities_for_connector(source_config.connector)
-        status = "ready" if source_config.enabled else "disabled"
+        health = await _check_source_health(source_config)
         entries.append(
             SourceRegistryDetail(
                 source_id=source_config.source_id,
@@ -88,15 +89,19 @@ def build_source_registry(source_configs: list[SourceConfig]) -> SourceRegistry:
                 access_mode=source_config.access_mode,
                 capabilities=capabilities,
                 enabled=source_config.enabled,
-                status=status,
-                last_checked_at=checked_at,
-                last_error=None,
+                status=health.status.value,
+                last_checked_at=health.last_checked_at,
+                last_error=health.last_error,
                 retrieval=source_config.retrieval,
                 profile=_build_source_profile(source_config),
             )
         )
 
     return SourceRegistry(entries, source_configs)
+
+
+def build_empty_source_registry() -> SourceRegistry:
+    return SourceRegistry([], [])
 
 
 def _build_source_profile(source_config: SourceConfig) -> SourceProfile:
@@ -113,6 +118,19 @@ def _build_source_profile(source_config: SourceConfig) -> SourceProfile:
         )
 
     return SourceProfile(summary="Configured source.", content_types=["source_record"])
+
+
+async def _check_source_health(source_config: SourceConfig) -> SourceHealth:
+    checked_at = datetime.now(UTC)
+    if not source_config.enabled:
+        return SourceHealth(
+            status=SourceStatus.DISABLED,
+            last_checked_at=checked_at,
+            last_error=None,
+        )
+
+    connector = get_connector(source_config.connector)
+    return await connector.check_health(source_config)
 
 
 def _sensitivity_allowed(source_sensitivity: Sensitivity, allowed_sensitivity: Sensitivity) -> bool:

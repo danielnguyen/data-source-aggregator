@@ -20,10 +20,26 @@ from app.models import ContextRequest, FetchRequest, SearchRequest
 class FakeGoogleSheetsClient(GoogleSheetsClient):
     def __init__(self, values_by_range: dict[str, list[list[str]]]) -> None:
         self.values_by_range = values_by_range
+        self.calls: list[tuple[str, str]] = []
 
     def get_values(self, spreadsheet_id: str, range_name: str) -> list[list[str]]:
         assert spreadsheet_id == "sheet-id"
+        self.calls.append((spreadsheet_id, range_name))
         return self.values_by_range[range_name]
+
+
+class FailingGoogleSheetsClient(GoogleSheetsClient):
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def get_values(self, spreadsheet_id: str, range_name: str) -> list[list[str]]:
+        raise self.error
+
+
+class FakeGoogleHttpError(Exception):
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.resp = type("Resp", (), {"status": status_code})()
 
 
 @pytest.fixture
@@ -56,25 +72,27 @@ def google_sheets_source_config(source_config_factory):
 
 @pytest.fixture
 def fake_sheet_values():
+    rows = [
+        ["Date", "Odometer", "Category", "Task", "Notes"],
+        [
+            "2026-05-12",
+            "123456",
+            "Electrical",
+            "Battery replacement",
+            "Replaced after slow crank",
+        ],
+        ["2026-05-01", "123200", "Oil", "Oil change", "Routine"],
+        [
+            "2026-05-14",
+            "123500",
+            "Electrical",
+            "Battery terminal clean",
+            "Cleaned corrosion",
+        ],
+    ]
     return {
-        "Maintenance": [
-            ["Date", "Odometer", "Category", "Task", "Notes"],
-            [
-                "2026-05-12",
-                "123456",
-                "Electrical",
-                "Battery replacement",
-                "Replaced after slow crank",
-            ],
-            ["2026-05-01", "123200", "Oil", "Oil change", "Routine"],
-            [
-                "2026-05-14",
-                "123500",
-                "Electrical",
-                "Battery terminal clean",
-                "Cleaned corrosion",
-            ],
-        ]
+        "Maintenance": rows,
+        "Maintenance!A1:A1": [rows[0]],
     }
 
 
@@ -88,6 +106,53 @@ def test_ics_calendar_returns_real_connector() -> None:
     connector = get_connector("ics_calendar")
 
     assert isinstance(connector, IcsCalendarConnector)
+
+
+@pytest.mark.anyio
+async def test_google_sheets_health_returns_ready_for_readable_sheet(
+    google_sheets_source_config,
+    fake_sheet_values,
+) -> None:
+    client = FakeGoogleSheetsClient(fake_sheet_values)
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    health = await connector.check_health(google_sheets_source_config)
+
+    assert health.status.value == "ready"
+    assert health.last_error is None
+    assert client.calls == [("sheet-id", "Maintenance!A1:A1")]
+
+
+@pytest.mark.anyio
+async def test_google_sheets_health_returns_unavailable_for_missing_credentials(
+    google_sheets_source_config,
+) -> None:
+    connector = GoogleSheetsConnector(
+        credential_registry_loader=lambda: CredentialRegistry(credentials={}),
+    )
+
+    health = await connector.check_health(google_sheets_source_config)
+
+    assert health.status.value == "unavailable"
+    assert health.last_error == "credentials_missing"
+
+
+@pytest.mark.anyio
+async def test_google_sheets_health_returns_permission_denied_without_secret_leak(
+    google_sheets_source_config,
+) -> None:
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FailingGoogleSheetsClient(
+            FakeGoogleHttpError(403, "forbidden sheet-id /tmp/secret.json")
+        )
+    )
+
+    health = await connector.check_health(google_sheets_source_config)
+
+    assert health.status.value == "unavailable"
+    assert health.last_error == "permission_denied"
+    assert "sheet-id" not in health.model_dump_json()
+    assert "/tmp/secret.json" not in health.model_dump_json()
 
 
 @pytest.mark.anyio

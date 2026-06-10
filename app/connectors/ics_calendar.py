@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
+from http import HTTPStatus
 from urllib.parse import quote, unquote
 from urllib.request import urlopen
 from uuid import uuid4
@@ -18,6 +20,8 @@ from app.models import (
     ResultEnvelope,
     SearchRequest,
     SourceConfig,
+    SourceHealth,
+    SourceStatus,
 )
 from app.services.source_ref import parse_source_ref
 
@@ -102,6 +106,35 @@ class IcsCalendarConnector:
         if request.max_results is not None:
             scored_events = scored_events[: request.max_results]
         return [result_envelope for _, _, result_envelope in scored_events]
+
+    async def check_health(self, source_config: SourceConfig) -> SourceHealth:
+        checked_at = self._now_factory()
+        try:
+            payload = self._client_factory(source_config).get_text(
+                self._calendar_url(source_config)
+            )
+            parse_ics_calendar_text(
+                payload,
+                timezone_name=self._timezone_name(source_config),
+            )
+        except ServiceError as exc:
+            return SourceHealth(
+                status=SourceStatus.UNAVAILABLE,
+                last_checked_at=checked_at,
+                last_error=_map_ics_health_service_error(exc),
+            )
+        except Exception as exc:
+            return SourceHealth(
+                status=SourceStatus.UNAVAILABLE,
+                last_checked_at=checked_at,
+                last_error=_map_ics_health_exception(exc),
+            )
+
+        return SourceHealth(
+            status=SourceStatus.READY,
+            last_checked_at=checked_at,
+            last_error=None,
+        )
 
     async def fetch(
         self,
@@ -245,6 +278,12 @@ class IcsCalendarConnector:
     def _calendar_url(self, source_config: SourceConfig) -> str:
         url = source_config.connector_config.get("url")
         if not isinstance(url, str) or not url:
+            url_env = source_config.connector_config.get("url_env")
+            if isinstance(url_env, str) and url_env:
+                env_value = os.getenv(url_env)
+                if isinstance(env_value, str) and env_value:
+                    return env_value
+
             raise ServiceError(
                 "invalid_request",
                 "The configured ics_calendar source is missing url.",
@@ -366,6 +405,8 @@ def parse_ics_calendar_source_ref(source_ref: str) -> ParsedIcsCalendarSourceRef
 def parse_ics_calendar_text(payload: str, *, timezone_name: str) -> list[CalendarEvent]:
     timezone = ZoneInfo(timezone_name)
     unfolded_lines = _unfold_ics_lines(payload)
+    if "BEGIN:VCALENDAR" not in unfolded_lines:
+        raise ValueError("ICS payload is missing VCALENDAR.")
     events: list[CalendarEvent] = []
     in_event = False
     event_lines: list[str] = []
@@ -571,3 +612,39 @@ def _score_event(query: str, query_terms: list[str], haystack: str) -> int:
         score += 25
 
     return score
+
+
+def _map_ics_health_service_error(error: ServiceError) -> str:
+    if error.code == "invalid_request":
+        return "connector_not_configured"
+    if error.code == "permission_denied":
+        return "permission_denied"
+    if error.code == "invalid_source_ref":
+        return "invalid_source_ref"
+    return "source_unavailable"
+
+
+def _map_ics_health_exception(error: Exception) -> str:
+    status_code = _extract_http_status_code(error)
+    if status_code in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}:
+        return "permission_denied"
+    if status_code is not None:
+        return "source_unavailable"
+
+    message = str(error).lower()
+    if "permission" in message or "forbidden" in message or "access denied" in message:
+        return "permission_denied"
+    return "source_unavailable"
+
+
+def _extract_http_status_code(error: Exception) -> int | None:
+    response = getattr(error, "resp", None)
+    status = getattr(response, "status", None)
+    if isinstance(status, int):
+        return status
+
+    status_code = getattr(error, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+
+    return None
