@@ -181,6 +181,59 @@ curl -X POST http://localhost:8000/v1/sources/context \
   }'
 ```
 
+Context pack:
+
+Returns compact evidence for downstream assistants. This endpoint does not generate an answer, and raw payloads are omitted by default.
+
+```bash
+curl -X POST http://localhost:8000/v1/context-pack \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "what maintenance did I do recently on the Jeep?",
+    "source_ids": ["vehicle_log_primary"],
+    "retrieval_mode": "targeted",
+    "allowed_sensitivity": "medium",
+    "budget": {
+      "max_results": 5,
+      "max_bytes": 50000,
+      "max_text_chars": 12000
+    }
+  }'
+```
+
+Example response:
+
+```json
+{
+  "query_id": "q_...",
+  "query": "what maintenance did I do recently on the Jeep?",
+  "sources_used": ["vehicle_log_primary"],
+  "items": [
+    {
+      "result_id": "r_...",
+      "source_type": "google_sheets",
+      "source_id": "vehicle_log_primary",
+      "source_name": "Vehicle Log - Primary",
+      "source_ref": "google_sheets:vehicle_log_primary:'Form responses 1'!A13:I13",
+      "retrieved_at": "2026-06-10T00:00:00Z",
+      "title": "09/03/2026",
+      "content_type": "spreadsheet_row",
+      "text": "Date: 09/03/2026\nKilometers: 83061\nComments/Repair Notes: Engine oil...",
+      "confidence": "high",
+      "warnings": []
+    }
+  ],
+  "warnings": [],
+  "errors": [],
+  "budget": {
+    "max_results": 5,
+    "returned_results": 1,
+    "estimated_bytes": 1234,
+    "truncated": false
+  }
+}
+```
+
 ## Audit log
 
 - Path: `var/audit/events.jsonl`

@@ -190,6 +190,22 @@ class ContextRequest(BaseModel):
     budget: RetrievalBudget | None = None
 
 
+class ContextPackRequest(BaseModel):
+    query: str = Field(min_length=1)
+    source_ids: list[str] | None = None
+    domain_tags: list[str] | None = None
+    retrieval_mode: RetrievalMode = RetrievalMode.TARGETED
+    allowed_sensitivity: Sensitivity = Sensitivity.LOW
+    budget: RetrievalBudget | None = None
+
+    @field_validator("source_ids", "domain_tags")
+    @classmethod
+    def validate_optional_lists(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and not value:
+            raise ValueError("List must not be empty when provided.")
+        return value
+
+
 class AvailableContext(BaseModel):
     context_mode: str
     description: str
@@ -221,6 +237,21 @@ class RetrievalBudgetSummary(BaseModel):
     truncated: bool
 
 
+class ContextPackItem(BaseModel):
+    result_id: str
+    source_type: str
+    source_id: str
+    source_name: str
+    source_ref: str
+    retrieved_at: datetime
+    source_modified_at: datetime | None = None
+    title: str
+    content_type: str
+    text: str
+    confidence: Confidence = Confidence.NONE
+    warnings: list[str] = Field(default_factory=list)
+
+
 class SearchResponse(BaseModel):
     query_id: str
     query: str
@@ -250,6 +281,16 @@ class ContextResponse(BaseModel):
     confidence: Confidence
     retrieval_mode: RetrievalMode = RetrievalMode.CONTEXT
     results: list[ResultEnvelope]
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[dict[str, object]] = Field(default_factory=list)
+    budget: RetrievalBudgetSummary
+
+
+class ContextPackResponse(BaseModel):
+    query_id: str
+    query: str
+    sources_used: list[str]
+    items: list[ContextPackItem]
     warnings: list[str] = Field(default_factory=list)
     errors: list[dict[str, object]] = Field(default_factory=list)
     budget: RetrievalBudgetSummary

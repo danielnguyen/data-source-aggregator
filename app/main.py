@@ -11,6 +11,8 @@ from app.audit import AuditLogWriter
 from app.config import load_source_configs
 from app.errors import ServiceError
 from app.models import (
+    ContextPackRequest,
+    ContextPackResponse,
     ContextRequest,
     ContextResponse,
     ErrorDetail,
@@ -24,6 +26,7 @@ from app.models import (
     SourceListResponse,
 )
 from app.registry import SourceRegistry, build_empty_source_registry, build_source_registry
+from app.services.context_pack import run_context_pack
 from app.services.fetch import run_context, run_fetch
 from app.services.search import run_search
 
@@ -118,6 +121,18 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
     async def get_context(request_body: ContextRequest, request: Request) -> ContextResponse:
         await _ensure_source_registry_loaded(request.app)
         return await run_context(
+            request_body,
+            _get_registry(request),
+            _get_audit_log_writer(request),
+        )
+
+    @app.post("/v1/context-pack", response_model=ContextPackResponse)
+    async def build_context_pack(
+        request_body: ContextPackRequest,
+        request: Request,
+    ) -> ContextPackResponse:
+        await _ensure_source_registry_loaded(request.app)
+        return await run_context_pack(
             request_body,
             _get_registry(request),
             _get_audit_log_writer(request),
