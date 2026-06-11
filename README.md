@@ -22,6 +22,16 @@ See [docs/deployment.md](docs/deployment.md) for the mount layout and [docs/smok
 - `secrets/`
 - `var/audit/`
 
+## Environment
+
+```text
+DSA_API_KEY=
+```
+
+- `DSA_API_KEY` is optional for local development.
+- When `DSA_API_KEY` is set, deployed and internal callers should send `X-API-Key: <DSA_API_KEY>` on all data-bearing API requests.
+- `GET /health` stays open without an API key.
+
 ### Example config files
 
 - `config/sources/vehicle_maintenance.example.yaml`
@@ -131,6 +141,13 @@ List sources:
 curl http://localhost:8000/v1/sources
 ```
 
+If `DSA_API_KEY` is set, include the header:
+
+```bash
+curl http://localhost:8000/v1/sources \
+  -H "X-API-Key: $DSA_API_KEY"
+```
+
 Search:
 
 ```bash
@@ -238,3 +255,4 @@ Example response:
 
 - Path: `var/audit/events.jsonl`
 - Override with `AUDIT_LOG_PATH`
+- Request headers, including `X-API-Key`, are not written to audit events.

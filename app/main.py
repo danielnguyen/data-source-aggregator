@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import hmac
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -8,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.audit import AuditLogWriter
-from app.config import load_source_configs
+from app.config import get_dsa_api_key, load_source_configs
 from app.errors import ServiceError
 from app.models import (
     ContextPackRequest,
@@ -41,6 +42,7 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
     app.state.source_registry = build_empty_source_registry()
     app.state.audit_log_writer = AuditLogWriter()
     app.state.source_config_dir = source_config_dir
+    app.state.dsa_api_key = get_dsa_api_key()
 
     @app.exception_handler(ServiceError)
     async def handle_service_error(_: Request, error: ServiceError) -> JSONResponse:
@@ -81,12 +83,14 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
 
     @app.get("/v1/sources", response_model=SourceListResponse)
     async def list_sources(request: Request) -> SourceListResponse:
+        _require_api_key(request)
         await _ensure_source_registry_loaded(request.app)
         registry = _get_registry(request)
         return SourceListResponse(sources=registry.list_sources())
 
     @app.get("/v1/sources/{source_id}", response_model=SourceDetailResponse)
     async def get_source(source_id: str, request: Request) -> SourceDetailResponse:
+        _require_api_key(request)
         await _ensure_source_registry_loaded(request.app)
         registry = _get_registry(request)
         source = registry.get_source(source_id)
@@ -101,6 +105,7 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
 
     @app.post("/v1/sources/search", response_model=SearchResponse)
     async def search_sources(request_body: SearchRequest, request: Request) -> SearchResponse:
+        _require_api_key(request)
         await _ensure_source_registry_loaded(request.app)
         return await run_search(
             request_body,
@@ -110,6 +115,7 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
 
     @app.post("/v1/sources/fetch", response_model=FetchResponse)
     async def fetch_source(request_body: FetchRequest, request: Request) -> FetchResponse:
+        _require_api_key(request)
         await _ensure_source_registry_loaded(request.app)
         return await run_fetch(
             request_body,
@@ -119,6 +125,7 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
 
     @app.post("/v1/sources/context", response_model=ContextResponse)
     async def get_context(request_body: ContextRequest, request: Request) -> ContextResponse:
+        _require_api_key(request)
         await _ensure_source_registry_loaded(request.app)
         return await run_context(
             request_body,
@@ -131,6 +138,7 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
         request_body: ContextPackRequest,
         request: Request,
     ) -> ContextPackResponse:
+        _require_api_key(request)
         await _ensure_source_registry_loaded(request.app)
         return await run_context_pack(
             request_body,
@@ -147,6 +155,23 @@ def _get_registry(request: Request) -> SourceRegistry:
 
 def _get_audit_log_writer(request: Request) -> AuditLogWriter:
     return request.app.state.audit_log_writer
+
+
+def _require_api_key(request: Request) -> None:
+    configured_api_key = request.app.state.dsa_api_key
+    if configured_api_key is None:
+        return
+
+    provided_api_key = request.headers.get("X-API-Key")
+    if provided_api_key and hmac.compare_digest(provided_api_key, configured_api_key):
+        return
+
+    raise ServiceError(
+        "unauthorized",
+        "Invalid or missing API key",
+        status_code=401,
+        details={},
+    )
 
 
 async def _ensure_source_registry_loaded(app: FastAPI) -> None:

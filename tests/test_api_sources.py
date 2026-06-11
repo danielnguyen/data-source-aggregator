@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from app.connectors import base as connector_base
+from app.models import ContextRequest, FetchRequest, ResultEnvelope, SearchRequest
 from app.main import create_app
 from app.models import SourceHealth, SourceStatus
 
@@ -46,6 +47,27 @@ async def test_sources_routes_return_safe_registry_entries(
     monkeypatch,
 ) -> None:
     class FakeHealthyGoogleSheetsConnector:
+        async def search(
+            self,
+            request: SearchRequest,
+            source_config,
+        ) -> list[ResultEnvelope]:
+            return []
+
+        async def fetch(
+            self,
+            request: FetchRequest,
+            source_config,
+        ) -> list[ResultEnvelope]:
+            return []
+
+        async def context(
+            self,
+            request: ContextRequest,
+            source_config,
+        ) -> list[ResultEnvelope]:
+            return []
+
         async def check_health(self, source_config):
             return SourceHealth(
                 status=SourceStatus.READY,
@@ -189,4 +211,162 @@ async def test_get_source_returns_404_for_unknown_source(tmp_path: Path) -> None
         "code": "source_not_found",
         "message": "Source 'missing_source' is not configured or is disabled.",
         "details": {"source_id": "missing_source"},
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("GET", "/v1/sources", None),
+        ("GET", "/v1/sources/vehicle_log_primary", None),
+        (
+            "POST",
+            "/v1/sources/search",
+            {
+                "query": "battery replacement",
+                "source_ids": ["vehicle_log_primary"],
+                "budget": {"max_results": 1, "max_bytes": 50000, "max_text_chars": 20000},
+            },
+        ),
+        (
+            "POST",
+            "/v1/sources/fetch",
+            {
+                "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A44:H44",
+                "budget": {"max_bytes": 50000, "max_text_chars": 20000},
+            },
+        ),
+        (
+            "POST",
+            "/v1/sources/context",
+            {
+                "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A44:H44",
+                "context_mode": "surrounding_rows",
+                "budget": {"max_rows": 5, "max_bytes": 50000, "max_text_chars": 20000},
+            },
+        ),
+        (
+            "POST",
+            "/v1/context-pack",
+            {
+                "query": "battery replacement",
+                "source_ids": ["vehicle_log_primary"],
+                "budget": {"max_results": 1, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        ),
+    ],
+)
+async def test_protected_routes_require_api_key_when_configured(
+    tmp_path: Path,
+    monkeypatch,
+    method: str,
+    path: str,
+    payload: dict[str, object] | None,
+) -> None:
+    class FakeHealthyGoogleSheetsConnector:
+        async def search(
+            self,
+            request: SearchRequest,
+            source_config,
+        ) -> list[ResultEnvelope]:
+            return []
+
+        async def fetch(
+            self,
+            request: FetchRequest,
+            source_config,
+        ) -> list[ResultEnvelope]:
+            return []
+
+        async def context(
+            self,
+            request: ContextRequest,
+            source_config,
+        ) -> list[ResultEnvelope]:
+            return []
+
+        async def check_health(self, source_config):
+            return SourceHealth(
+                status=SourceStatus.READY,
+                last_checked_at="2026-06-10T00:00:00Z",
+                last_error=None,
+            )
+
+    monkeypatch.setitem(
+        connector_base.CONNECTOR_FACTORIES,
+        "google_sheets",
+        lambda: FakeHealthyGoogleSheetsConnector(),
+    )
+    monkeypatch.setenv("DSA_API_KEY", "dsa-secret")
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "source.yaml").write_text(
+        """
+source_id: vehicle_log_primary
+display_name: Vehicle Log - Primary
+description: Personal vehicle operating records.
+domain_tags: [vehicle, maintenance]
+connector: google_sheets
+enabled: true
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id: sheet-secret-id
+  worksheet: Maintenance
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  max_context_rows: 250
+  allow_full_fetch: true
+""",
+        encoding="utf-8",
+    )
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        missing = await client.request(method, path, json=payload)
+        wrong = await client.request(method, path, json=payload, headers={"X-API-Key": "wrong-key"})
+        correct = await client.request(
+            method,
+            path,
+            json=payload,
+            headers={"X-API-Key": "dsa-secret"},
+        )
+
+    assert missing.status_code == 401
+    assert missing.json() == {
+        "error": {
+            "code": "unauthorized",
+            "message": "Invalid or missing API key",
+            "details": {},
+        }
+    }
+    assert wrong.status_code == 401
+    assert wrong.json() == missing.json()
+    assert correct.status_code != 401
+
+
+@pytest.mark.anyio
+async def test_health_route_remains_open_when_api_key_is_configured(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DSA_API_KEY", "dsa-secret")
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "service": "data-source-aggregator",
     }
