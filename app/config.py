@@ -17,6 +17,14 @@ from app.models import SourceConfig
 DEFAULT_SOURCE_CONFIG_DIR = Path("config/sources")
 
 
+def get_dsa_api_key() -> str | None:
+    _load_local_dotenv()
+    configured = os.getenv("DSA_API_KEY")
+    if configured in (None, ""):
+        return None
+    return configured
+
+
 def get_source_config_dir() -> Path:
     _load_local_dotenv()
     configured = os.getenv("SOURCE_CONFIG_DIR")

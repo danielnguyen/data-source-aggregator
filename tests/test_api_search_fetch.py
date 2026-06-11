@@ -324,6 +324,41 @@ async def test_search_route_returns_empty_stub_results_and_writes_audit(
 
 
 @pytest.mark.anyio
+async def test_search_route_audit_does_not_include_api_key(
+    tmp_path: Path,
+    monkeypatch,
+    fake_api_connector,
+) -> None:
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    monkeypatch.setenv("DSA_API_KEY", "super-secret-dsa-key")
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_source_config(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/search",
+            headers={"X-API-Key": "super-secret-dsa-key"},
+            json={
+                "query": "battery replacement",
+                "source_ids": ["vehicle_log_primary"],
+                "budget": {
+                    "max_results": 10,
+                    "max_bytes": 50000,
+                    "max_text_chars": 20000,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert "super-secret-dsa-key" not in json.dumps(audit_event)
+
+
+@pytest.mark.anyio
 async def test_search_route_returns_stable_unknown_source_error_and_writes_audit(
     tmp_path: Path,
     monkeypatch,

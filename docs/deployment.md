@@ -59,6 +59,9 @@ The service-level environment is:
 - `SOURCE_CONFIG_DIR=/app/config/sources`
 - `CREDENTIALS_CONFIG_PATH=/app/config/credentials.yaml`
 - `AUDIT_LOG_PATH=/app/var/audit/events.jsonl`
+- `DSA_API_KEY=`
+
+`DSA_API_KEY` is optional for local development. For deployed or internal stacks, set it and require callers to send `X-API-Key: <DSA_API_KEY>` on all data-bearing endpoints.
 
 This layout allows `/app/config/credentials.yaml` to be absent cleanly when no enabled source needs credentials. Source examples still remain inactive until copied to non-example filenames inside the mounted `config/sources/` directory.
 
