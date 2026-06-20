@@ -6,9 +6,15 @@ import httpx
 import pytest
 
 from app.connectors import base as connector_base
-from app.models import ContextRequest, FetchRequest, ResultEnvelope, SearchRequest
 from app.main import create_app
-from app.models import SourceHealth, SourceStatus
+from app.models import (
+    ContextRequest,
+    FetchRequest,
+    ResultEnvelope,
+    SearchRequest,
+    SourceHealth,
+    SourceStatus,
+)
 
 
 def _write_credentials_config(tmp_path: Path, monkeypatch) -> None:

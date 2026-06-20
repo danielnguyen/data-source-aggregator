@@ -202,12 +202,15 @@ Context pack:
 
 Returns compact evidence for downstream assistants. This endpoint does not generate an answer, and raw payloads are omitted by default.
 
+When `source_ids` are omitted, `/v1/context-pack` uses deterministic metadata relevance over configured source metadata such as source IDs, display names, descriptions, domain tags, connector names, and source profile fields. Weak or ambiguous matches fall back to the full eligible source set instead of returning no evidence. Explicit `source_ids` always override relevance, and explicit `domain_tags` always constrain the eligible source set first.
+
+When multiple sources are searched, the service keeps a bounded per-source candidate set and then round-robins candidates in source-relevance order so one high-volume source cannot consume the entire result budget just because it is configured first. The final `budget` still enforces `max_results`, `max_bytes`, and `max_text_chars`. The optional `diagnostics` field reports bounded selection and ranking details without exposing secrets or raw private payloads.
+
 ```bash
 curl -X POST http://localhost:8000/v1/context-pack \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "what maintenance did I do recently on the Jeep?",
-    "source_ids": ["vehicle_log_primary"],
+    "query": "when did I last change the oil in my vehicle?",
     "retrieval_mode": "targeted",
     "allowed_sensitivity": "medium",
     "budget": {
@@ -223,15 +226,15 @@ Example response:
 ```json
 {
   "query_id": "q_...",
-  "query": "what maintenance did I do recently on the Jeep?",
-  "sources_used": ["vehicle_log_primary"],
+  "query": "when did I last change the oil in my vehicle?",
+  "sources_used": ["vehicle_log_example"],
   "items": [
     {
       "result_id": "r_...",
       "source_type": "google_sheets",
-      "source_id": "vehicle_log_primary",
-      "source_name": "Vehicle Log - Primary",
-      "source_ref": "google_sheets:vehicle_log_primary:'Form responses 1'!A13:I13",
+      "source_id": "vehicle_log_example",
+      "source_name": "Vehicle Log",
+      "source_ref": "google_sheets:vehicle_log_example:Maintenance!A13:I13",
       "retrieved_at": "2026-06-10T00:00:00Z",
       "title": "09/03/2026",
       "content_type": "spreadsheet_row",
@@ -247,6 +250,24 @@ Example response:
     "returned_results": 1,
     "estimated_bytes": 1234,
     "truncated": false
+  },
+  "diagnostics": {
+    "selection_mode": "query_relevance",
+    "considered_source_ids": ["vehicle_log_example", "calendar_sports_example"],
+    "selected_source_ids": ["vehicle_log_example"],
+    "source_diagnostics": [
+      {
+        "source_id": "vehicle_log_example",
+        "score": 22,
+        "score_band": "high",
+        "reasons": ["display_name_match", "domain_tag_match", "description_match"]
+      }
+    ],
+    "ranking_mode": "single_source",
+    "candidate_counts_by_source": {
+      "vehicle_log_example": 1
+    },
+    "budget_truncated_candidates": false
   }
 }
 ```
