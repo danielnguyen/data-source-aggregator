@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from http import HTTPStatus
 from uuid import uuid4
 
@@ -25,6 +25,7 @@ from app.models import (
     SourceHealth,
     SourceStatus,
 )
+from app.services.relevance import build_query_relevance_profile, overlap_score, tokenize_text
 from app.services.result_text import render_row_text
 from app.services.source_ref import parse_source_ref
 
@@ -62,6 +63,17 @@ class SheetRow:
     range_name: str
 
 
+@dataclass(frozen=True)
+class RowMatch:
+    score: int
+    matched_tokens: set[str]
+    specific_matched_tokens: set[str]
+
+    @property
+    def has_specific_subject_match(self) -> bool:
+        return bool(self.specific_matched_tokens)
+
+
 class GoogleSheetsConnector:
     connector_name = "google_sheets"
 
@@ -81,28 +93,41 @@ class GoogleSheetsConnector:
         source_config: SourceConfig,
     ) -> list[ResultEnvelope]:
         sheet_rows = self._load_sheet_rows(source_config)
-        query = request.query.strip().lower()
-        query_terms = [term for term in query.split() if term]
-        scored_rows: list[tuple[int, SheetRow, ResultEnvelope]] = []
+        query_profile = build_query_relevance_profile(request.query)
+        source_tokens = _source_identity_tokens(source_config)
+        scored_rows: list[tuple[RowMatch, date | None, int, ResultEnvelope]] = []
 
-        for sheet_row in sheet_rows:
+        for index, sheet_row in enumerate(sheet_rows):
             result_envelope = self._build_row_result(
                 source_config,
                 sheet_row,
                 include_raw=request.include_raw,
             )
-            search_haystack = "\n".join(
-                [result_envelope.text, *sheet_row.values_by_header.values()]
-            ).lower()
-            score = _score_row(query, query_terms, search_haystack)
-            if score <= 0:
+            row_match = _score_row(
+                query_profile.tokens,
+                source_tokens,
+                sheet_row,
+                result_envelope,
+            )
+            if row_match.score <= 0:
                 continue
-            scored_rows.append((score, sheet_row, result_envelope))
+            scored_rows.append((row_match, result_envelope.record_date, index, result_envelope))
 
-        scored_rows.sort(key=lambda item: (-item[0], item[1].row_number))
+        if query_profile.wants_latest:
+            scored_rows.sort(
+                key=lambda item: (
+                    -(1 if item[0].has_specific_subject_match else 0),
+                    -(1 if item[1] is not None else 0),
+                    -(item[1].toordinal() if item[1] is not None else 0),
+                    -item[0].score,
+                    item[2],
+                )
+            )
+        else:
+            scored_rows.sort(key=lambda item: (-item[0].score, item[2]))
         if request.max_results is not None:
             scored_rows = scored_rows[: request.max_results]
-        return [result_envelope for _, _, result_envelope in scored_rows]
+        return [result_envelope for _, _, _, result_envelope in scored_rows]
 
     async def check_health(self, source_config: SourceConfig) -> SourceHealth:
         checked_at = self._now_factory()
@@ -314,6 +339,7 @@ class GoogleSheetsConnector:
                 else None
             ),
             available_context=context_items,
+            record_date=_extract_sheet_row_date(sheet_row.values_by_header),
         )
 
     def _build_range_result(
@@ -542,23 +568,91 @@ def column_index_to_letter(index: int) -> str:
     return "".join(reversed(result))
 
 
-def _score_row(query: str, query_terms: list[str], haystack: str) -> int:
-    if not haystack:
-        return 0
+def _score_row(
+    query_tokens: set[str],
+    source_tokens: set[str],
+    sheet_row: SheetRow,
+    result_envelope: ResultEnvelope,
+) -> RowMatch:
+    if not query_tokens:
+        return RowMatch(score=0, matched_tokens=set(), specific_matched_tokens=set())
 
-    score = 0
-    if query and query in haystack:
-        score += 100
+    row_tokens = tokenize_text(
+        " ".join(
+            [
+                result_envelope.title,
+                result_envelope.text,
+                *sheet_row.values_by_header.values(),
+            ]
+        )
+    )
+    score, matched_tokens = overlap_score(query_tokens, row_tokens, weight=10)
+    if matched_tokens:
+        score += len(matched_tokens)
+    specific_matched_tokens = matched_tokens - source_tokens
+    return RowMatch(
+        score=score,
+        matched_tokens=matched_tokens,
+        specific_matched_tokens=specific_matched_tokens,
+    )
 
-    matched_terms = 0
-    for term in query_terms:
-        if term in haystack:
-            matched_terms += 1
-            score += 10
 
-    if matched_terms:
-        score += matched_terms
-    return score
+def _source_identity_tokens(source_config: SourceConfig) -> set[str]:
+    return tokenize_text(
+        " ".join(
+            [
+                source_config.source_id,
+                source_config.display_name,
+                source_config.connector,
+            ]
+        )
+    )
+
+
+def _extract_sheet_row_date(values_by_header: dict[str, str]) -> date | None:
+    for header, value in values_by_header.items():
+        if "date" not in header.lower():
+            continue
+        parsed = _parse_sheet_date(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_sheet_date(value: str) -> date | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    for parser in (
+        _parse_iso_date,
+        _parse_slash_date,
+    ):
+        parsed = parser(normalized)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_iso_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _parse_slash_date(value: str) -> date | None:
+    match = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", value)
+    if match is None:
+        return None
+
+    day = int(match.group(1))
+    month = int(match.group(2))
+    year = int(match.group(3))
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
 
 
 def _map_google_health_service_error(error: ServiceError) -> str:

@@ -14,7 +14,7 @@ from app.models import (
     SourceRegistryEntry,
     SourceStatus,
 )
-from app.services.relevance import overlap_score, tokenize_text
+from app.services.relevance import build_query_relevance_profile, overlap_score, tokenize_text
 
 
 @dataclass(frozen=True)
@@ -139,7 +139,7 @@ class SourceRegistry:
         source_config: SourceConfig,
     ) -> RankedSource:
         entry = self._entries[source_config.source_id]
-        query_tokens = tokenize_text(query)
+        query_tokens = build_query_relevance_profile(query).tokens
         field_matches: list[tuple[str, int, set[str]]] = [
             (
                 "source_id_match",

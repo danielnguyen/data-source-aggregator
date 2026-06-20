@@ -206,6 +206,8 @@ When `source_ids` are omitted, `/v1/context-pack` uses deterministic metadata re
 
 When multiple sources are searched, the service keeps a bounded per-source candidate set and then round-robins candidates in source-relevance order so one high-volume source cannot consume the entire result budget just because it is configured first. The final `budget` still enforces `max_results`, `max_bytes`, and `max_text_chars`. The optional `diagnostics` field reports bounded selection and ranking details without exposing secrets or raw private payloads.
 
+For clear latest-record queries such as `last`, `latest`, `newest`, or `most recent`, result ordering stays relevance-first and then prefers source-native record dates within the relevant result set when those dates are available.
+
 ```bash
 curl -X POST http://localhost:8000/v1/context-pack \
   -H "Content-Type: application/json" \

@@ -83,6 +83,20 @@ def fake_sheet_values():
         ],
         ["2026-05-01", "123200", "Oil", "Oil change", "Routine"],
         [
+            "2026-05-15",
+            "123560",
+            "Oil",
+            "Transfer case service",
+            "Engine oil and transfer case fluid service",
+        ],
+        [
+            "2026-05-20",
+            "123700",
+            "Inspection",
+            "Vehicle inspection",
+            "Vehicle inspection and tire rotation",
+        ],
+        [
             "2026-05-14",
             "123500",
             "Electrical",
@@ -211,6 +225,46 @@ async def test_search_honors_max_results_and_ranking(
 
     assert len(results) == 1
     assert results[0].title == "Battery replacement"
+
+
+@pytest.mark.anyio
+async def test_search_prefers_latest_relevant_oil_record_over_older_exact_match(
+    # The newest generic vehicle row must not outrank the newer oil-related row.
+    google_sheets_source_config,
+    fake_sheet_values,
+) -> None:
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient(fake_sheet_values),
+    )
+
+    results = await connector.search(
+        SearchRequest(query="When did I last change my car oil?", include_raw=True),
+        google_sheets_source_config,
+    )
+
+    assert [result.source_ref for result in results[:3]] == [
+        "google_sheets:vehicle_log_primary:Maintenance!A4:E4",
+        "google_sheets:vehicle_log_primary:Maintenance!A3:E3",
+        "google_sheets:vehicle_log_primary:Maintenance!A5:E5",
+    ]
+
+
+@pytest.mark.anyio
+async def test_search_matches_punctuation_in_oil_queries(
+    google_sheets_source_config,
+    fake_sheet_values,
+) -> None:
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient(fake_sheet_values),
+    )
+
+    results = await connector.search(
+        SearchRequest(query="oil?", include_raw=True),
+        google_sheets_source_config,
+    )
+
+    assert results
+    assert results[0].source_ref == "google_sheets:vehicle_log_primary:Maintenance!A3:E3"
 
 
 @pytest.mark.anyio
@@ -389,7 +443,7 @@ async def test_context_nearby_rows_returns_neighboring_rows(
     assert [result.title for result in results] == [
         "Battery replacement",
         "Oil change",
-        "Battery terminal clean",
+        "Transfer case service",
     ]
     assert all(result.source_name == "Vehicle Log - Primary" for result in results)
 

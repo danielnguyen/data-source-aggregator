@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+RECENCY_PATTERN = re.compile(r"\b(?:last|latest|newest|most\s+recent)\b")
 STOPWORDS = {
     "a",
     "an",
@@ -29,6 +31,12 @@ STOPWORDS = {
 }
 
 
+@dataclass(frozen=True)
+class QueryRelevanceProfile:
+    tokens: set[str]
+    wants_latest: bool
+
+
 def tokenize_text(text: str | None) -> set[str]:
     if not text:
         return set()
@@ -39,6 +47,14 @@ def tokenize_text(text: str | None) -> set[str]:
         if match.group(0) not in STOPWORDS
     }
     return expand_tokens(tokens)
+
+
+def build_query_relevance_profile(query: str | None) -> QueryRelevanceProfile:
+    normalized_query = (query or "").lower()
+    return QueryRelevanceProfile(
+        tokens=tokenize_text(query),
+        wants_latest=bool(RECENCY_PATTERN.search(normalized_query)),
+    )
 
 
 def expand_tokens(tokens: Iterable[str]) -> set[str]:
@@ -55,6 +71,12 @@ def expand_tokens(tokens: Iterable[str]) -> set[str]:
 
     if "electric" in expanded and "vehicle" in expanded:
         expanded.add("ev")
+
+    if "car" in expanded:
+        expanded.add("vehicle")
+
+    if "vehicle" in expanded:
+        expanded.add("car")
 
     return expanded
 
