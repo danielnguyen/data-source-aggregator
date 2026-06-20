@@ -252,6 +252,23 @@ class ContextPackItem(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ContextPackSourceDiagnostic(BaseModel):
+    source_id: str
+    score: int
+    score_band: str
+    reasons: list[str] = Field(default_factory=list)
+
+
+class ContextPackDiagnostics(BaseModel):
+    selection_mode: str
+    considered_source_ids: list[str]
+    selected_source_ids: list[str]
+    source_diagnostics: list[ContextPackSourceDiagnostic] = Field(default_factory=list)
+    ranking_mode: str
+    candidate_counts_by_source: dict[str, int] = Field(default_factory=dict)
+    budget_truncated_candidates: bool = False
+
+
 class SearchResponse(BaseModel):
     query_id: str
     query: str
@@ -294,6 +311,7 @@ class ContextPackResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     errors: list[dict[str, object]] = Field(default_factory=list)
     budget: RetrievalBudgetSummary
+    diagnostics: ContextPackDiagnostics | None = None
 
 
 class ErrorDetail(BaseModel):

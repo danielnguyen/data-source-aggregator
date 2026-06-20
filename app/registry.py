@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.connectors.base import capabilities_for_connector, get_connector
 from app.models import (
+    ContextPackSourceDiagnostic,
     Sensitivity,
     SourceConfig,
     SourceHealth,
@@ -12,6 +14,19 @@ from app.models import (
     SourceRegistryEntry,
     SourceStatus,
 )
+from app.services.relevance import overlap_score, tokenize_text
+
+
+@dataclass(frozen=True)
+class RankedSource:
+    source_config: SourceConfig
+    score: int
+    matched_terms: set[str]
+    reasons: list[str]
+
+    @property
+    def source_id(self) -> str:
+        return self.source_config.source_id
 
 
 class SourceRegistry:
@@ -36,6 +51,52 @@ class SourceRegistry:
 
     def get_source_config(self, source_id: str) -> SourceConfig | None:
         return self._source_configs.get(source_id)
+
+    def rank_sources_for_query(
+        self,
+        *,
+        query: str,
+        allowed_sensitivity: Sensitivity,
+        required_capability: str,
+        domain_tags: list[str] | None = None,
+    ) -> tuple[str, list[SourceConfig], list[ContextPackSourceDiagnostic]]:
+        eligible_sources = self.select_sources(
+            source_ids=None,
+            domain_tags=domain_tags,
+            allowed_sensitivity=allowed_sensitivity,
+            required_capability=required_capability,
+        )
+        ranked_sources = [
+            self._score_source_for_query(query, source_config)
+            for source_config in eligible_sources
+        ]
+        ranked_sources.sort(
+            key=lambda ranked_source: (-ranked_source.score, ranked_source.source_id)
+        )
+
+        positive_sources = [
+            ranked_source for ranked_source in ranked_sources if ranked_source.score > 0
+        ]
+        if domain_tags:
+            selection_mode = "domain_tags"
+            selected_sources = [ranked_source.source_config for ranked_source in ranked_sources]
+        elif self._should_use_broad_fallback(eligible_sources, positive_sources):
+            selection_mode = "broad_fallback"
+            selected_sources = [ranked_source.source_config for ranked_source in ranked_sources]
+        else:
+            selection_mode = "query_relevance"
+            selected_sources = [ranked_source.source_config for ranked_source in positive_sources]
+
+        diagnostics = [
+            ContextPackSourceDiagnostic(
+                source_id=ranked_source.source_id,
+                score=ranked_source.score,
+                score_band=_score_band(ranked_source.score),
+                reasons=ranked_source.reasons,
+            )
+            for ranked_source in ranked_sources
+        ]
+        return selection_mode, selected_sources, diagnostics
 
     def select_sources(
         self,
@@ -71,6 +132,96 @@ class SourceRegistry:
             matched.append(self._source_configs[source_id])
 
         return matched
+
+    def _score_source_for_query(
+        self,
+        query: str,
+        source_config: SourceConfig,
+    ) -> RankedSource:
+        entry = self._entries[source_config.source_id]
+        query_tokens = tokenize_text(query)
+        field_matches: list[tuple[str, int, set[str]]] = [
+            (
+                "source_id_match",
+                *overlap_score(
+                    query_tokens,
+                    tokenize_text(source_config.source_id),
+                    weight=5,
+                ),
+            ),
+            (
+                "display_name_match",
+                *overlap_score(
+                    query_tokens,
+                    tokenize_text(source_config.display_name),
+                    weight=8,
+                ),
+            ),
+            (
+                "domain_tag_match",
+                *overlap_score(
+                    query_tokens,
+                    tokenize_text(" ".join(source_config.domain_tags)),
+                    weight=7,
+                ),
+            ),
+            (
+                "description_match",
+                *overlap_score(
+                    query_tokens,
+                    tokenize_text(source_config.description),
+                    weight=5,
+                ),
+            ),
+            (
+                "connector_match",
+                *overlap_score(
+                    query_tokens,
+                    tokenize_text(source_config.connector),
+                    weight=4,
+                ),
+            ),
+            (
+                "profile_summary_match",
+                *overlap_score(query_tokens, tokenize_text(entry.profile.summary), weight=3),
+            ),
+            (
+                "content_type_match",
+                *overlap_score(
+                    query_tokens,
+                    tokenize_text(" ".join(entry.profile.content_types)),
+                    weight=3,
+                ),
+            ),
+        ]
+
+        score = 0
+        matched_terms: set[str] = set()
+        reasons: list[str] = []
+        for reason, partial_score, partial_matches in field_matches:
+            if partial_score <= 0:
+                continue
+            score += partial_score
+            matched_terms.update(partial_matches)
+            reasons.append(reason)
+
+        return RankedSource(
+            source_config=source_config,
+            score=score,
+            matched_terms=matched_terms,
+            reasons=reasons,
+        )
+
+    def _should_use_broad_fallback(
+        self,
+        eligible_sources: list[SourceConfig],
+        positive_sources: list[RankedSource],
+    ) -> bool:
+        if not eligible_sources or not positive_sources:
+            return True
+
+        strongest_source = positive_sources[0]
+        return strongest_source.score < 7 and len(strongest_source.matched_terms) < 2
 
 
 async def build_source_registry(source_configs: list[SourceConfig]) -> SourceRegistry:
@@ -141,3 +292,13 @@ def _sensitivity_allowed(source_sensitivity: Sensitivity, allowed_sensitivity: S
         Sensitivity.RESTRICTED: 3,
     }
     return order[source_sensitivity] <= order[allowed_sensitivity]
+
+
+def _score_band(score: int) -> str:
+    if score >= 14:
+        return "high"
+    if score >= 7:
+        return "medium"
+    if score > 0:
+        return "low"
+    return "none"

@@ -78,6 +78,132 @@ retrieval:
     )
 
 
+def _write_multi_source_configs(source_dir: Path, *, reverse_order: bool = False) -> None:
+    sources = [
+        (
+            "01_vehicle.yaml",
+            """
+source_id: vehicle_service_log
+display_name: Vehicle Service Log
+description: >
+  Combustion vehicle maintenance log with oil changes, repairs,
+  and upcoming service reminders.
+domain_tags: [vehicle, maintenance, repair, oil]
+connector: google_sheets
+enabled: true
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id: sheet-vehicle
+  worksheet: Maintenance
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  max_context_rows: 250
+  allow_full_fetch: true
+""",
+        ),
+        (
+            "02_ev.yaml",
+            """
+source_id: electric_vehicle_history
+display_name: Electric Vehicle Service History
+description: Electric vehicle service, charging, and inspection history.
+domain_tags: [vehicle, electric, ev, charging, service]
+connector: google_sheets
+enabled: true
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id: sheet-ev
+  worksheet: Maintenance
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  max_context_rows: 250
+  allow_full_fetch: true
+""",
+        ),
+        (
+            "03_personal.yaml",
+            """
+source_id: personal_calendar_agenda
+display_name: Personal Calendar Agenda
+description: Personal calendar of appointments, schedule, and upcoming events.
+domain_tags: [calendar, appointment, schedule]
+connector: ics_calendar
+enabled: true
+sensitivity: low
+access_mode: read_only
+connector_config:
+  url: https://example.test/personal.ics
+  timezone: America/Toronto
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+""",
+        ),
+        (
+            "04_family.yaml",
+            """
+source_id: family_calendar_agenda
+display_name: Family Calendar Agenda
+description: Family calendar with appointments and shared schedule items.
+domain_tags: [calendar, family, appointment, schedule]
+connector: ics_calendar
+enabled: true
+sensitivity: low
+access_mode: read_only
+connector_config:
+  url: https://example.test/family.ics
+  timezone: America/Toronto
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+""",
+        ),
+        (
+            "05_holidays.yaml",
+            """
+source_id: public_holiday_calendar
+display_name: National Summer Holiday Calendar
+description: Public holiday and observance calendar with summer holiday dates.
+domain_tags: [calendar, holiday, summer]
+connector: ics_calendar
+enabled: true
+sensitivity: low
+access_mode: read_only
+connector_config:
+  url: https://example.test/holidays.ics
+  timezone: America/Toronto
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+""",
+        ),
+    ]
+
+    for filename, content in (list(reversed(sources)) if reverse_order else sources):
+        (source_dir / filename).write_text(content, encoding="utf-8")
+
+
 def _write_credentials_config(tmp_path: Path, monkeypatch) -> None:
     credentials_path = tmp_path / "credentials.yaml"
     credentials_path.write_text(
@@ -231,6 +357,195 @@ class FakeContextPackConnector:
         )
 
 
+class FakeMultiSourceContextPackConnector:
+    async def search(
+        self,
+        request: SearchRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        results_by_source = {
+            "vehicle_service_log": [
+                ResultEnvelope(
+                    result_id="r_vehicle_oil",
+                    source_type="google_sheets",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="google_sheets:vehicle_service_log:Maintenance!A2:F2",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="Oil change",
+                    content_type="spreadsheet_row",
+                    text=(
+                        "Vehicle maintenance log entry. Oil change completed for the vehicle on "
+                        "2026-05-14 with engine oil and filter service."
+                    ),
+                    confidence=Confidence.HIGH,
+                ),
+                ResultEnvelope(
+                    result_id="r_vehicle_brake",
+                    source_type="google_sheets",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="google_sheets:vehicle_service_log:Maintenance!A3:F3",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="Brake inspection",
+                    content_type="spreadsheet_row",
+                    text="Vehicle maintenance record for an upcoming brake inspection.",
+                    confidence=Confidence.MEDIUM,
+                ),
+            ],
+            "electric_vehicle_history": [
+                ResultEnvelope(
+                    result_id="r_ev_service",
+                    source_type="google_sheets",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="google_sheets:electric_vehicle_history:Maintenance!A2:F2",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="Electric vehicle service",
+                    content_type="spreadsheet_row",
+                    text=(
+                        "Electric vehicle service history entry with traction battery coolant "
+                        "inspection and charging system check on 2026-04-21."
+                    ),
+                    confidence=Confidence.HIGH,
+                ),
+            ],
+            "personal_calendar_agenda": [
+                ResultEnvelope(
+                    result_id="r_personal_appointment",
+                    source_type="ics_calendar",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="ics_calendar:personal_calendar_agenda:event:personal-dentist-20260625",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="Dentist appointment",
+                    content_type="calendar_event",
+                    text="Calendar appointment next week on 2026-06-25 for a dentist visit.",
+                    confidence=Confidence.HIGH,
+                ),
+                ResultEnvelope(
+                    result_id="r_personal_planning",
+                    source_type="ics_calendar",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="ics_calendar:personal_calendar_agenda:event:planning-20260627",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="Planning session",
+                    content_type="calendar_event",
+                    text="Upcoming calendar planning session on 2026-06-27.",
+                    confidence=Confidence.MEDIUM,
+                ),
+            ],
+            "family_calendar_agenda": [
+                ResultEnvelope(
+                    result_id="r_family_appointment",
+                    source_type="ics_calendar",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="ics_calendar:family_calendar_agenda:event:family-checkup-20260626",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="Family checkup",
+                    content_type="calendar_event",
+                    text="Shared family calendar appointment on 2026-06-26.",
+                    confidence=Confidence.HIGH,
+                ),
+            ],
+            "public_holiday_calendar": [
+                ResultEnvelope(
+                    result_id="r_holiday_1",
+                    source_type="ics_calendar",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="ics_calendar:public_holiday_calendar:event:national-summer-holiday",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="National Summer Holiday",
+                    content_type="calendar_event",
+                    text="Public holiday on 2026-07-01.",
+                    confidence=Confidence.HIGH,
+                ),
+                ResultEnvelope(
+                    result_id="r_holiday_2",
+                    source_type="ics_calendar",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="ics_calendar:public_holiday_calendar:event:harvest-observance",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="Harvest Observance",
+                    content_type="calendar_event",
+                    text="Public holiday observance on 2026-09-05.",
+                    confidence=Confidence.MEDIUM,
+                ),
+                ResultEnvelope(
+                    result_id="r_holiday_3",
+                    source_type="ics_calendar",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="ics_calendar:public_holiday_calendar:event:winter-festival",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="Winter Festival",
+                    content_type="calendar_event",
+                    text="Seasonal holiday on 2026-12-20.",
+                    confidence=Confidence.MEDIUM,
+                ),
+                ResultEnvelope(
+                    result_id="r_holiday_4",
+                    source_type="ics_calendar",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="ics_calendar:public_holiday_calendar:event:new-year-observance",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="New Year Observance",
+                    content_type="calendar_event",
+                    text="Public holiday on 2027-01-01.",
+                    confidence=Confidence.MEDIUM,
+                ),
+                ResultEnvelope(
+                    result_id="r_holiday_5",
+                    source_type="ics_calendar",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="ics_calendar:public_holiday_calendar:event:spring-observance",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="Spring Observance",
+                    content_type="calendar_event",
+                    text="Public holiday on 2027-03-21.",
+                    confidence=Confidence.MEDIUM,
+                ),
+            ],
+        }
+        return results_by_source.get(source_config.source_id, [])
+
+    async def fetch(
+        self,
+        request: FetchRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        raise ServiceError(
+            "unsupported_operation",
+            "Connector does not support fetch in this test.",
+            status_code=501,
+            details={"connector": source_config.connector, "operation": "fetch"},
+        )
+
+    async def context(
+        self,
+        request: ContextRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        raise ServiceError(
+            "unsupported_operation",
+            "Connector does not support context in this test.",
+            status_code=501,
+            details={"connector": source_config.connector, "operation": "context"},
+        )
+
+    async def check_health(self, source_config: SourceConfig) -> SourceHealth:
+        return SourceHealth(
+            status=SourceStatus.READY,
+            last_checked_at=datetime(2026, 6, 10, tzinfo=UTC),
+        )
+
+
 @pytest.fixture
 def fake_api_connector(monkeypatch):
     connector = FakeApiConnector()
@@ -243,6 +558,15 @@ def fake_api_connector(monkeypatch):
 @pytest.fixture
 def fake_context_pack_connector(monkeypatch):
     connector = FakeContextPackConnector()
+    monkeypatch.setattr(search_service.connector_base, "get_connector", lambda _: connector)
+    monkeypatch.setattr(context_pack_service.connector_base, "get_connector", lambda _: connector)
+    monkeypatch.setattr(registry_module, "get_connector", lambda _: connector)
+    return connector
+
+
+@pytest.fixture
+def fake_multi_source_context_pack_connector(monkeypatch):
+    connector = FakeMultiSourceContextPackConnector()
     monkeypatch.setattr(search_service.connector_base, "get_connector", lambda _: connector)
     monkeypatch.setattr(context_pack_service.connector_base, "get_connector", lambda _: connector)
     monkeypatch.setattr(registry_module, "get_connector", lambda _: connector)
@@ -321,6 +645,36 @@ async def test_search_route_returns_empty_stub_results_and_writes_audit(
     assert audit_event["result_count"] == 0
     assert "sheet-secret-id" not in json.dumps(audit_event)
     assert "google_sheets_readonly" not in json.dumps(audit_event)
+
+
+@pytest.mark.anyio
+async def test_search_route_without_filters_remains_broadly_compatible(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/search",
+            json={
+                "query": "vehicle maintenance",
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 10, "max_bytes": 50000, "max_text_chars": 20000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {result["source_id"] for result in payload["results"]} >= {
+        "vehicle_service_log",
+        "public_holiday_calendar",
+    }
 
 
 @pytest.mark.anyio
@@ -654,3 +1008,369 @@ async def test_context_pack_route_filters_disallowed_sensitivity_like_search(
     assert response.status_code == 404
     payload = response.json()
     assert payload["error"]["code"] == "source_not_found"
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_uses_query_relevance_for_vehicle_queries(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": (
+                    "Search my vehicle maintenance log and tell me when I last changed "
+                    "the oil in my vehicle."
+                ),
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["diagnostics"]["selection_mode"] == "query_relevance"
+    assert payload["sources_used"][0] == "vehicle_service_log"
+    assert payload["items"][0]["source_id"] == "vehicle_service_log"
+    assert "Oil change" in payload["items"][0]["title"]
+    assert "public_holiday_calendar" not in payload["sources_used"]
+    assert payload["budget"]["returned_results"] >= 1
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_uses_query_relevance_for_electric_vehicle_queries(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "When did I last service my electric vehicle?",
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "electric_vehicle_history" in payload["sources_used"]
+    assert any(item["source_id"] == "electric_vehicle_history" for item in payload["items"])
+    assert all("calendar" not in item["source_id"] for item in payload["items"])
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_prefers_calendar_sources_for_calendar_queries(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "What is on my calendar next week?",
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "personal_calendar_agenda" in payload["sources_used"]
+    assert any("calendar" in item["source_id"] for item in payload["items"])
+    assert all("vehicle" not in item["source_id"] for item in payload["items"])
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_prefers_holiday_source_for_holiday_queries(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "When is the national summer holiday?",
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sources_used"][0] == "public_holiday_calendar"
+    assert payload["items"][0]["source_id"] == "public_holiday_calendar"
+    assert "National Summer Holiday" in payload["items"][0]["title"]
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_supports_cross_domain_queries_without_starvation(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "What appointments and vehicle maintenance do I have coming up?",
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 4, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    source_ids = [item["source_id"] for item in payload["items"]]
+    assert any("calendar" in source_id for source_id in source_ids)
+    assert any("vehicle" in source_id for source_id in source_ids)
+    assert payload["diagnostics"]["ranking_mode"] == "round_robin_by_source_relevance"
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_falls_back_broadly_for_ambiguous_queries(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "status",
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 3, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["diagnostics"]["selection_mode"] == "broad_fallback"
+    assert set(payload["sources_used"]) == {
+        "vehicle_service_log",
+        "electric_vehicle_history",
+        "personal_calendar_agenda",
+        "family_calendar_agenda",
+        "public_holiday_calendar",
+    }
+    assert payload["budget"]["returned_results"] == 3
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_honors_explicit_source_override(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "When did I last service my electric vehicle?",
+                "source_ids": ["vehicle_service_log"],
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sources_used"] == ["vehicle_service_log"]
+    assert payload["diagnostics"]["selection_mode"] == "explicit_source_ids"
+    assert all(item["source_id"] == "vehicle_service_log" for item in payload["items"])
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_honors_domain_tag_constraint(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "oil change",
+                "domain_tags": ["calendar"],
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 4, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["diagnostics"]["selection_mode"] == "domain_tags"
+    assert payload["sources_used"]
+    assert all("calendar" in source_id for source_id in payload["sources_used"])
+    assert all("calendar" in item["source_id"] for item in payload["items"])
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_is_registry_order_independent(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    first_dir = tmp_path / "sources_first"
+    second_dir = tmp_path / "sources_second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    _write_multi_source_configs(first_dir)
+    _write_multi_source_configs(second_dir, reverse_order=True)
+
+    first_transport = httpx.ASGITransport(app=create_app(source_config_dir=first_dir))
+    second_transport = httpx.ASGITransport(app=create_app(source_config_dir=second_dir))
+
+    async with httpx.AsyncClient(
+        transport=first_transport,
+        base_url="http://test",
+    ) as first_client:
+        first_response = await first_client.post(
+            "/v1/context-pack",
+            json={
+                "query": (
+                    "Search my vehicle maintenance log and tell me when I last changed "
+                    "the oil in my vehicle."
+                ),
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=second_transport,
+        base_url="http://test",
+    ) as second_client:
+        second_response = await second_client.post(
+            "/v1/context-pack",
+            json={
+                "query": (
+                    "Search my vehicle maintenance log and tell me when I last changed "
+                    "the oil in my vehicle."
+                ),
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    first_payload = first_response.json()
+    second_payload = second_response.json()
+    assert first_payload["sources_used"] == second_payload["sources_used"]
+    assert [item["source_id"] for item in first_payload["items"]] == [
+        item["source_id"] for item in second_payload["items"]
+    ]
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_enforces_text_char_budget_with_truthful_diagnostics(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "vehicle maintenance",
+                "source_ids": ["vehicle_service_log"],
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 130},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["budget"]["returned_results"] == 1
+    assert payload["budget"]["truncated"] is True
+    assert payload["diagnostics"]["candidate_counts_by_source"] == {"vehicle_service_log": 2}
+    assert payload["diagnostics"]["budget_truncated_candidates"] is True
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_preserves_result_too_large_for_oversized_first_item(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "vehicle maintenance",
+                "source_ids": ["vehicle_service_log"],
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 40, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 413
+    payload = response.json()
+    assert payload["error"]["code"] == "result_too_large"

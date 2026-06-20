@@ -135,3 +135,98 @@ async def test_disabled_source_returns_disabled_without_connector_check(
     entry = registry.list_sources()[0]
     assert entry.status == "disabled"
     assert entry.last_error is None
+
+
+@pytest.mark.anyio
+async def test_rank_sources_for_query_prefers_vehicle_metadata(
+    source_config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vehicle_source = source_config_factory(
+        source_id="vehicle_service_log",
+        display_name="Vehicle Service Log",
+        description="Combustion vehicle maintenance and oil service records.",
+        domain_tags=["vehicle", "maintenance", "repair"],
+    )
+    holiday_source = source_config_factory(
+        source_id="public_holiday_calendar",
+        display_name="Public Holiday Calendar",
+        description="National holiday and observance calendar.",
+        domain_tags=["calendar", "holiday"],
+        connector="ics_calendar",
+        connector_config={
+            "url": "https://example.test/holidays.ics",
+            "timezone": "America/Toronto",
+        },
+    )
+
+    class FakeConnector:
+        async def check_health(self, source_config: SourceConfig):
+            return SourceHealth(
+                status=SourceStatus.READY,
+                last_checked_at=datetime(2026, 6, 10, tzinfo=UTC),
+                last_error=None,
+            )
+
+    monkeypatch.setattr("app.registry.get_connector", lambda _: FakeConnector())
+
+    registry = await build_source_registry([holiday_source, vehicle_source])
+    selection_mode, selected_sources, diagnostics = registry.rank_sources_for_query(
+        query="Search my vehicle maintenance log and tell me when I last changed the oil.",
+        allowed_sensitivity=vehicle_source.sensitivity,
+        required_capability="search",
+    )
+
+    assert selection_mode == "query_relevance"
+    assert [source.source_id for source in selected_sources] == ["vehicle_service_log"]
+    assert diagnostics[0].source_id == "vehicle_service_log"
+    assert diagnostics[0].score_band in {"medium", "high"}
+    assert "domain_tag_match" in diagnostics[0].reasons
+
+
+@pytest.mark.anyio
+async def test_rank_sources_for_query_falls_back_broadly_when_match_is_weak(
+    source_config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vehicle_source = source_config_factory(
+        source_id="vehicle_service_log",
+        display_name="Vehicle Service Log",
+        description="Combustion vehicle maintenance and oil service records.",
+        domain_tags=["vehicle", "maintenance", "repair"],
+    )
+    calendar_source = source_config_factory(
+        source_id="personal_calendar_agenda",
+        display_name="Personal Calendar",
+        description="Personal appointments and schedule.",
+        domain_tags=["calendar", "appointment"],
+        connector="ics_calendar",
+        connector_config={
+            "url": "https://example.test/personal.ics",
+            "timezone": "America/Toronto",
+        },
+    )
+
+    class FakeConnector:
+        async def check_health(self, source_config: SourceConfig):
+            return SourceHealth(
+                status=SourceStatus.READY,
+                last_checked_at=datetime(2026, 6, 10, tzinfo=UTC),
+                last_error=None,
+            )
+
+    monkeypatch.setattr("app.registry.get_connector", lambda _: FakeConnector())
+
+    registry = await build_source_registry([vehicle_source, calendar_source])
+    selection_mode, selected_sources, diagnostics = registry.rank_sources_for_query(
+        query="status",
+        allowed_sensitivity=vehicle_source.sensitivity,
+        required_capability="search",
+    )
+
+    assert selection_mode == "broad_fallback"
+    assert {source.source_id for source in selected_sources} == {
+        "vehicle_service_log",
+        "personal_calendar_agenda",
+    }
+    assert all(diagnostic.score == 0 for diagnostic in diagnostics)
