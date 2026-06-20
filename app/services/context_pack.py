@@ -22,7 +22,11 @@ from app.models import (
 )
 from app.registry import SourceRegistry
 from app.services.budget import build_effective_budget
-from app.services.relevance import overlap_score, tokenize_text
+from app.services.relevance import (
+    build_query_relevance_profile,
+    overlap_score,
+    tokenize_text,
+)
 
 
 async def run_context_pack(
@@ -180,6 +184,7 @@ def _rank_context_pack_candidates(
     source_diagnostics: list[ContextPackSourceDiagnostic],
     candidate_envelopes_by_source: dict[str, list[ResultEnvelope]],
 ) -> tuple[list[ResultEnvelope], str]:
+    query_profile = build_query_relevance_profile(query)
     source_scores = {
         diagnostic.source_id: diagnostic.score for diagnostic in source_diagnostics
     }
@@ -189,13 +194,16 @@ def _rank_context_pack_candidates(
     for source_config in selected_sources:
         source_id = source_config.source_id
         source_candidates = candidate_envelopes_by_source.get(source_id, [])
-        ranked_candidates = sorted(
-            enumerate(source_candidates),
-            key=lambda item: (
-                -_score_result_for_query(query, item[1]),
-                item[0],
-            ),
-        )
+        if query_profile.wants_latest:
+            ranked_candidates = list(enumerate(source_candidates))
+        else:
+            ranked_candidates = sorted(
+                enumerate(source_candidates),
+                key=lambda item: (
+                    -_score_result_for_query(query, item[1]),
+                    item[0],
+                ),
+            )
         ranked_envelopes = [result_envelope for _, result_envelope in ranked_candidates]
         ranked_candidates_by_source[source_id] = deque(ranked_envelopes)
         top_result_score = (
@@ -205,7 +213,12 @@ def _rank_context_pack_candidates(
 
     if len(selected_sources) <= 1:
         only_source_id = selected_sources[0].source_id if selected_sources else ""
-        return list(ranked_candidates_by_source.get(only_source_id, deque())), "single_source"
+        return (
+            list(ranked_candidates_by_source.get(only_source_id, deque())),
+            "single_source_relevance_then_recency"
+            if query_profile.wants_latest
+            else "single_source",
+        )
 
     ranked_source_ids = [
         source_id
@@ -227,7 +240,12 @@ def _rank_context_pack_candidates(
         if not appended:
             break
 
-    return interleaved_results, "round_robin_by_source_relevance"
+    return (
+        interleaved_results,
+        "round_robin_by_source_relevance_then_recency"
+        if query_profile.wants_latest
+        else "round_robin_by_source_relevance",
+    )
 
 
 def _score_result_for_query(query: str, result_envelope: ResultEnvelope) -> int:

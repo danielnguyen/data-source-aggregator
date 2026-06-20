@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -228,6 +228,7 @@ class ResultEnvelope(BaseModel):
     raw: dict[str, object] | None = None
     available_context: list[AvailableContext] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    record_date: date | None = Field(default=None, exclude=True)
 
 
 class RetrievalBudgetSummary(BaseModel):

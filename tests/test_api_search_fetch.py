@@ -366,31 +366,46 @@ class FakeMultiSourceContextPackConnector:
         results_by_source = {
             "vehicle_service_log": [
                 ResultEnvelope(
-                    result_id="r_vehicle_oil",
+                    result_id="r_vehicle_oil_recent",
                     source_type="google_sheets",
                     source_id=source_config.source_id,
                     source_name=source_config.display_name,
                     source_ref="google_sheets:vehicle_service_log:Maintenance!A2:F2",
                     retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
-                    title="Oil change",
+                    title="09/03/2026",
                     content_type="spreadsheet_row",
                     text=(
-                        "Vehicle maintenance log entry. Oil change completed for the vehicle on "
-                        "2026-05-14 with engine oil and filter service."
+                        "Date: 09/03/2026\n"
+                        "Service Notes: Engine oil; transfer case fluid service completed."
                     ),
                     confidence=Confidence.HIGH,
+                    record_date=datetime(2026, 3, 9, tzinfo=UTC).date(),
+                ),
+                ResultEnvelope(
+                    result_id="r_vehicle_oil_older",
+                    source_type="google_sheets",
+                    source_id=source_config.source_id,
+                    source_name=source_config.display_name,
+                    source_ref="google_sheets:vehicle_service_log:Maintenance!A3:F3",
+                    retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+                    title="14/08/2025",
+                    content_type="spreadsheet_row",
+                    text="Date: 14/08/2025\nService Notes: Completed oil change and filter.",
+                    confidence=Confidence.HIGH,
+                    record_date=datetime(2025, 8, 14, tzinfo=UTC).date(),
                 ),
                 ResultEnvelope(
                     result_id="r_vehicle_brake",
                     source_type="google_sheets",
                     source_id=source_config.source_id,
                     source_name=source_config.display_name,
-                    source_ref="google_sheets:vehicle_service_log:Maintenance!A3:F3",
+                    source_ref="google_sheets:vehicle_service_log:Maintenance!A4:F4",
                     retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
-                    title="Brake inspection",
+                    title="20/04/2026",
                     content_type="spreadsheet_row",
-                    text="Vehicle maintenance record for an upcoming brake inspection.",
+                    text="Date: 20/04/2026\nService Notes: Brake inspection and tire rotation.",
                     confidence=Confidence.MEDIUM,
+                    record_date=datetime(2026, 4, 20, tzinfo=UTC).date(),
                 ),
             ],
             "electric_vehicle_history": [
@@ -1011,7 +1026,7 @@ async def test_context_pack_route_filters_disallowed_sensitivity_like_search(
 
 
 @pytest.mark.anyio
-async def test_context_pack_route_uses_query_relevance_for_vehicle_queries(
+async def test_context_pack_route_ranks_latest_relevant_vehicle_record_first(
     tmp_path: Path,
     monkeypatch,
     fake_multi_source_context_pack_connector,
@@ -1026,10 +1041,7 @@ async def test_context_pack_route_uses_query_relevance_for_vehicle_queries(
         response = await client.post(
             "/v1/context-pack",
             json={
-                "query": (
-                    "Search my vehicle maintenance log and tell me when I last changed "
-                    "the oil in my vehicle."
-                ),
+                "query": "When did I last change my car oil?",
                 "allowed_sensitivity": "medium",
                 "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
             },
@@ -1040,9 +1052,130 @@ async def test_context_pack_route_uses_query_relevance_for_vehicle_queries(
     assert payload["diagnostics"]["selection_mode"] == "query_relevance"
     assert payload["sources_used"][0] == "vehicle_service_log"
     assert payload["items"][0]["source_id"] == "vehicle_service_log"
-    assert "Oil change" in payload["items"][0]["title"]
+    assert (
+        payload["items"][0]["source_ref"]
+        == "google_sheets:vehicle_service_log:Maintenance!A2:F2"
+    )
+    assert "09/03/2026" == payload["items"][0]["title"]
+    vehicle_item_refs = [
+        item["source_ref"]
+        for item in payload["items"]
+        if item["source_id"] == "vehicle_service_log"
+    ]
+    assert vehicle_item_refs[:3] == [
+        "google_sheets:vehicle_service_log:Maintenance!A2:F2",
+        "google_sheets:vehicle_service_log:Maintenance!A3:F3",
+        "google_sheets:vehicle_service_log:Maintenance!A4:F4",
+    ]
+    assert all("calendar" not in source_id for source_id in payload["sources_used"])
     assert "public_holiday_calendar" not in payload["sources_used"]
-    assert payload["budget"]["returned_results"] >= 1
+    assert payload["budget"]["returned_results"] >= 3
+    assert payload["diagnostics"]["ranking_mode"] == "round_robin_by_source_relevance_then_recency"
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_treats_latest_and_most_recent_as_equivalent_temporal_queries(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        latest_response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "When was my latest car oil service?",
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+        most_recent_response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "When was my most recent car oil service?",
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert latest_response.status_code == 200
+    assert most_recent_response.status_code == 200
+    assert (
+        latest_response.json()["items"][0]["source_ref"]
+        == "google_sheets:vehicle_service_log:Maintenance!A2:F2"
+    )
+    assert (
+        most_recent_response.json()["items"][0]["source_ref"]
+        == "google_sheets:vehicle_service_log:Maintenance!A2:F2"
+    )
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_keeps_non_temporal_oil_change_queries_relevance_first(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "oil change",
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert (
+        payload["items"][0]["source_ref"]
+        == "google_sheets:vehicle_service_log:Maintenance!A3:F3"
+    )
+    assert payload["diagnostics"]["ranking_mode"] == "single_source"
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_matches_punctuation_in_oil_queries(
+    tmp_path: Path,
+    monkeypatch,
+    fake_multi_source_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_multi_source_configs(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "oil?",
+                "source_ids": ["vehicle_service_log"],
+                "allowed_sensitivity": "medium",
+                "budget": {"max_results": 5, "max_bytes": 50000, "max_text_chars": 12000},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sources_used"] == ["vehicle_service_log"]
+    assert (
+        payload["items"][0]["source_ref"]
+        == "google_sheets:vehicle_service_log:Maintenance!A2:F2"
+    )
 
 
 @pytest.mark.anyio
@@ -1344,7 +1477,7 @@ async def test_context_pack_route_enforces_text_char_budget_with_truthful_diagno
     payload = response.json()
     assert payload["budget"]["returned_results"] == 1
     assert payload["budget"]["truncated"] is True
-    assert payload["diagnostics"]["candidate_counts_by_source"] == {"vehicle_service_log": 2}
+    assert payload["diagnostics"]["candidate_counts_by_source"] == {"vehicle_service_log": 3}
     assert payload["diagnostics"]["budget_truncated_candidates"] is True
 
 
