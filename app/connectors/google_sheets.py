@@ -63,6 +63,17 @@ class SheetRow:
     range_name: str
 
 
+@dataclass(frozen=True)
+class RowMatch:
+    score: int
+    matched_tokens: set[str]
+    specific_matched_tokens: set[str]
+
+    @property
+    def has_specific_subject_match(self) -> bool:
+        return bool(self.specific_matched_tokens)
+
+
 class GoogleSheetsConnector:
     connector_name = "google_sheets"
 
@@ -83,7 +94,8 @@ class GoogleSheetsConnector:
     ) -> list[ResultEnvelope]:
         sheet_rows = self._load_sheet_rows(source_config)
         query_profile = build_query_relevance_profile(request.query)
-        scored_rows: list[tuple[int, date | None, int, ResultEnvelope]] = []
+        source_tokens = _source_identity_tokens(source_config)
+        scored_rows: list[tuple[RowMatch, date | None, int, ResultEnvelope]] = []
 
         for index, sheet_row in enumerate(sheet_rows):
             result_envelope = self._build_row_result(
@@ -91,22 +103,28 @@ class GoogleSheetsConnector:
                 sheet_row,
                 include_raw=request.include_raw,
             )
-            score = _score_row(query_profile.tokens, sheet_row, result_envelope)
-            if score <= 0:
+            row_match = _score_row(
+                query_profile.tokens,
+                source_tokens,
+                sheet_row,
+                result_envelope,
+            )
+            if row_match.score <= 0:
                 continue
-            scored_rows.append((score, result_envelope.record_date, index, result_envelope))
+            scored_rows.append((row_match, result_envelope.record_date, index, result_envelope))
 
         if query_profile.wants_latest:
             scored_rows.sort(
                 key=lambda item: (
+                    -(1 if item[0].has_specific_subject_match else 0),
                     -(1 if item[1] is not None else 0),
                     -(item[1].toordinal() if item[1] is not None else 0),
-                    -item[0],
+                    -item[0].score,
                     item[2],
                 )
             )
         else:
-            scored_rows.sort(key=lambda item: (-item[0], item[2]))
+            scored_rows.sort(key=lambda item: (-item[0].score, item[2]))
         if request.max_results is not None:
             scored_rows = scored_rows[: request.max_results]
         return [result_envelope for _, _, _, result_envelope in scored_rows]
@@ -548,13 +566,16 @@ def column_index_to_letter(index: int) -> str:
         current, remainder = divmod(current - 1, 26)
         result.append(chr(65 + remainder))
     return "".join(reversed(result))
+
+
 def _score_row(
     query_tokens: set[str],
+    source_tokens: set[str],
     sheet_row: SheetRow,
     result_envelope: ResultEnvelope,
-) -> int:
+) -> RowMatch:
     if not query_tokens:
-        return 0
+        return RowMatch(score=0, matched_tokens=set(), specific_matched_tokens=set())
 
     row_tokens = tokenize_text(
         " ".join(
@@ -568,7 +589,24 @@ def _score_row(
     score, matched_tokens = overlap_score(query_tokens, row_tokens, weight=10)
     if matched_tokens:
         score += len(matched_tokens)
-    return score
+    specific_matched_tokens = matched_tokens - source_tokens
+    return RowMatch(
+        score=score,
+        matched_tokens=matched_tokens,
+        specific_matched_tokens=specific_matched_tokens,
+    )
+
+
+def _source_identity_tokens(source_config: SourceConfig) -> set[str]:
+    return tokenize_text(
+        " ".join(
+            [
+                source_config.source_id,
+                source_config.display_name,
+                source_config.connector,
+            ]
+        )
+    )
 
 
 def _extract_sheet_row_date(values_by_header: dict[str, str]) -> date | None:

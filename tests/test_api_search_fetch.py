@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app import registry as registry_module
+from app.connectors.google_sheets import GoogleSheetsClient, GoogleSheetsConnector
 from app.errors import ServiceError
 from app.main import create_app
 from app.models import (
@@ -561,6 +562,43 @@ class FakeMultiSourceContextPackConnector:
         )
 
 
+class MultiSourceFakeGoogleSheetsClient(GoogleSheetsClient):
+    def __init__(self, values_by_spreadsheet_id: dict[str, dict[str, list[list[str]]]]) -> None:
+        self._values_by_spreadsheet_id = values_by_spreadsheet_id
+
+    def get_values(self, spreadsheet_id: str, range_name: str) -> list[list[str]]:
+        return self._values_by_spreadsheet_id[spreadsheet_id][range_name]
+
+
+class EmptyCalendarConnector:
+    async def search(
+        self,
+        request: SearchRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        return []
+
+    async def fetch(
+        self,
+        request: FetchRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        return []
+
+    async def context(
+        self,
+        request: ContextRequest,
+        source_config: SourceConfig,
+    ) -> list[ResultEnvelope]:
+        return []
+
+    async def check_health(self, source_config: SourceConfig) -> SourceHealth:
+        return SourceHealth(
+            status=SourceStatus.READY,
+            last_checked_at=datetime(2026, 6, 10, tzinfo=UTC),
+        )
+
+
 @pytest.fixture
 def fake_api_connector(monkeypatch):
     connector = FakeApiConnector()
@@ -586,6 +624,66 @@ def fake_multi_source_context_pack_connector(monkeypatch):
     monkeypatch.setattr(context_pack_service.connector_base, "get_connector", lambda _: connector)
     monkeypatch.setattr(registry_module, "get_connector", lambda _: connector)
     return connector
+
+
+@pytest.fixture
+def real_multi_source_context_pack_connectors(monkeypatch):
+    vehicle_rows = [
+        ["Date", "Odometer", "Category", "Task", "Notes"],
+        ["14/08/2025", "80000", "Oil", "Oil change", "Completed oil change and filter."],
+        [
+            "09/03/2026",
+            "83061",
+            "Oil",
+            "Transfer case service",
+            "Engine oil and transfer case fluid service completed.",
+        ],
+        [
+            "20/04/2026",
+            "84000",
+            "Inspection",
+            "Vehicle inspection",
+            "Vehicle inspection and tire rotation.",
+        ],
+    ]
+    ev_rows = [
+        ["Date", "Odometer", "Category", "Task", "Notes"],
+        [
+            "21/04/2026",
+            "15000",
+            "Inspection",
+            "Charging system inspection",
+            "Traction battery coolant inspection and charging system check.",
+        ],
+    ]
+    google_connector = GoogleSheetsConnector(
+        client_factory=lambda source_config: MultiSourceFakeGoogleSheetsClient(
+            {
+                "sheet-vehicle": {
+                    "Maintenance": vehicle_rows,
+                    "Maintenance!A1:A1": [vehicle_rows[0]],
+                },
+                "sheet-ev": {
+                    "Maintenance": ev_rows,
+                    "Maintenance!A1:A1": [ev_rows[0]],
+                },
+            }
+        ),
+        now_factory=lambda: datetime(2026, 6, 10, tzinfo=UTC),
+    )
+    calendar_connector = EmptyCalendarConnector()
+
+    def get_connector(name: str):
+        if name == "google_sheets":
+            return google_connector
+        if name == "ics_calendar":
+            return calendar_connector
+        raise AssertionError(f"Unexpected connector: {name}")
+
+    monkeypatch.setattr(search_service.connector_base, "get_connector", get_connector)
+    monkeypatch.setattr(context_pack_service.connector_base, "get_connector", get_connector)
+    monkeypatch.setattr(registry_module, "get_connector", get_connector)
+    return google_connector
 
 
 @pytest.mark.anyio
@@ -1029,7 +1127,7 @@ async def test_context_pack_route_filters_disallowed_sensitivity_like_search(
 async def test_context_pack_route_ranks_latest_relevant_vehicle_record_first(
     tmp_path: Path,
     monkeypatch,
-    fake_multi_source_context_pack_connector,
+    real_multi_source_context_pack_connectors,
 ) -> None:
     _write_credentials_config(tmp_path, monkeypatch)
     source_dir = tmp_path / "sources"
@@ -1054,18 +1152,18 @@ async def test_context_pack_route_ranks_latest_relevant_vehicle_record_first(
     assert payload["items"][0]["source_id"] == "vehicle_service_log"
     assert (
         payload["items"][0]["source_ref"]
-        == "google_sheets:vehicle_service_log:Maintenance!A2:F2"
+        == "google_sheets:vehicle_service_log:Maintenance!A3:E3"
     )
-    assert "09/03/2026" == payload["items"][0]["title"]
+    assert "09/03/2026" in payload["items"][0]["text"]
     vehicle_item_refs = [
         item["source_ref"]
         for item in payload["items"]
         if item["source_id"] == "vehicle_service_log"
     ]
     assert vehicle_item_refs[:3] == [
-        "google_sheets:vehicle_service_log:Maintenance!A2:F2",
-        "google_sheets:vehicle_service_log:Maintenance!A3:F3",
-        "google_sheets:vehicle_service_log:Maintenance!A4:F4",
+        "google_sheets:vehicle_service_log:Maintenance!A3:E3",
+        "google_sheets:vehicle_service_log:Maintenance!A2:E2",
+        "google_sheets:vehicle_service_log:Maintenance!A4:E4",
     ]
     assert all("calendar" not in source_id for source_id in payload["sources_used"])
     assert "public_holiday_calendar" not in payload["sources_used"]

@@ -93,8 +93,8 @@ def fake_sheet_values():
             "2026-05-20",
             "123700",
             "Inspection",
-            "Brake inspection",
-            "Brake inspection and tire rotation",
+            "Vehicle inspection",
+            "Vehicle inspection and tire rotation",
         ],
         [
             "2026-05-14",
@@ -228,7 +228,8 @@ async def test_search_honors_max_results_and_ranking(
 
 
 @pytest.mark.anyio
-async def test_search_prefers_latest_relevant_oil_record_for_temporal_queries(
+async def test_search_prefers_latest_relevant_oil_record_over_older_exact_match(
+    # The newest generic vehicle row must not outrank the newer oil-related row.
     google_sheets_source_config,
     fake_sheet_values,
 ) -> None:
@@ -241,9 +242,10 @@ async def test_search_prefers_latest_relevant_oil_record_for_temporal_queries(
         google_sheets_source_config,
     )
 
-    assert [result.source_ref for result in results[:2]] == [
+    assert [result.source_ref for result in results[:3]] == [
         "google_sheets:vehicle_log_primary:Maintenance!A4:E4",
         "google_sheets:vehicle_log_primary:Maintenance!A3:E3",
+        "google_sheets:vehicle_log_primary:Maintenance!A5:E5",
     ]
 
 
