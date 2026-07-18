@@ -207,8 +207,14 @@ class ContextPackRequest(BaseModel):
 
 
 class AvailableContext(BaseModel):
-    context_mode: str
-    description: str
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    context_mode: str = Field(
+        min_length=1,
+        max_length=120,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    description: str = Field(min_length=1, max_length=500)
 
 
 class ResultEnvelope(BaseModel):
@@ -226,9 +232,30 @@ class ResultEnvelope(BaseModel):
     url: str | None = None
     confidence: Confidence = Confidence.NONE
     raw: dict[str, object] | None = None
-    available_context: list[AvailableContext] = Field(default_factory=list)
+    available_context: list[AvailableContext] = Field(default_factory=list, max_length=16)
     warnings: list[str] = Field(default_factory=list)
     record_date: date | None = Field(default=None, exclude=True)
+
+    @field_validator("available_context", mode="before")
+    @classmethod
+    def validate_available_context_collection(
+        cls,
+        value: object,
+    ) -> object:
+        if not isinstance(value, list):
+            raise ValueError("Available context must be a list.")
+        return value
+
+    @field_validator("available_context")
+    @classmethod
+    def validate_unique_context_modes(
+        cls,
+        value: list[AvailableContext],
+    ) -> list[AvailableContext]:
+        context_modes = [descriptor.context_mode for descriptor in value]
+        if len(set(context_modes)) != len(context_modes):
+            raise ValueError("Available context modes must be unique.")
+        return value
 
 
 class RetrievalBudgetSummary(BaseModel):
@@ -250,7 +277,29 @@ class ContextPackItem(BaseModel):
     content_type: str
     text: str
     confidence: Confidence = Confidence.NONE
+    available_context: list[AvailableContext] = Field(default_factory=list, max_length=16)
     warnings: list[str] = Field(default_factory=list)
+
+    @field_validator("available_context", mode="before")
+    @classmethod
+    def validate_available_context_collection(
+        cls,
+        value: object,
+    ) -> object:
+        if not isinstance(value, list):
+            raise ValueError("Available context must be a list.")
+        return value
+
+    @field_validator("available_context")
+    @classmethod
+    def validate_unique_context_modes(
+        cls,
+        value: list[AvailableContext],
+    ) -> list[AvailableContext]:
+        context_modes = [descriptor.context_mode for descriptor in value]
+        if len(set(context_modes)) != len(context_modes):
+            raise ValueError("Available context modes must be unique.")
+        return value
 
 
 class ContextPackSourceDiagnostic(BaseModel):

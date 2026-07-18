@@ -174,6 +174,10 @@ def _build_context_pack_item(result_envelope: ResultEnvelope) -> ContextPackItem
         content_type=result_envelope.content_type,
         text=result_envelope.text,
         confidence=result_envelope.confidence,
+        available_context=[
+            descriptor.model_copy(deep=True)
+            for descriptor in result_envelope.available_context
+        ],
         warnings=list(result_envelope.warnings),
     )
 

@@ -202,6 +202,10 @@ Context pack:
 
 Returns compact evidence for downstream assistants. This endpoint does not generate an answer, and raw payloads are omitted by default.
 
+Each item includes an explicit `available_context` collection. These bounded descriptors are declared by the connector for that specific source reference and tell a downstream caller which context-expansion modes are available. They are capability discovery only: `/v1/context-pack` does not execute expansion, infer modes from connector or content type, or add expansion arguments. An empty list means the connector declared no expansion option for that item.
+
+Descriptors contain only a bounded identifier-safe `context_mode` and bounded human-readable `description`. They do not include URLs, credentials, source or connector configuration, raw content, or executable arguments. Descriptor bytes are included in the existing serialized-item `max_bytes` accounting; descriptions are bounded metadata and do not consume the separate evidence-text `max_text_chars` budget.
+
 When `source_ids` are omitted, `/v1/context-pack` uses deterministic metadata relevance over configured source metadata such as source IDs, display names, descriptions, domain tags, connector names, and source profile fields. Weak or ambiguous matches fall back to the full eligible source set instead of returning no evidence. Explicit `source_ids` always override relevance, and explicit `domain_tags` always constrain the eligible source set first.
 
 When multiple sources are searched, the service keeps a bounded per-source candidate set and then round-robins candidates in source-relevance order so one high-volume source cannot consume the entire result budget just because it is configured first. The final `budget` still enforces `max_results`, `max_bytes`, and `max_text_chars`. The optional `diagnostics` field reports bounded selection and ranking details without exposing secrets or raw private payloads.
@@ -242,6 +246,12 @@ Example response:
       "content_type": "spreadsheet_row",
       "text": "Date: 09/03/2026\nKilometers: 83061\nComments/Repair Notes: Engine oil...",
       "confidence": "high",
+      "available_context": [
+        {
+          "context_mode": "nearby_rows",
+          "description": "Fetch nearby rows."
+        }
+      ],
       "warnings": []
     }
   ],
