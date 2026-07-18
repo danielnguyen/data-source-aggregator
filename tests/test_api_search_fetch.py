@@ -12,6 +12,7 @@ from app.connectors.google_sheets import GoogleSheetsClient, GoogleSheetsConnect
 from app.errors import ServiceError
 from app.main import create_app
 from app.models import (
+    AvailableContext,
     Confidence,
     ContextRequest,
     FetchRequest,
@@ -259,12 +260,18 @@ class FakeApiConnector:
 
 
 class FakeContextPackConnector:
+    def __init__(self) -> None:
+        self.search_calls: list[str] = []
+        self.fetch_call_count = 0
+        self.context_call_count = 0
+
     async def search(
         self,
         request: SearchRequest,
         source_config: SourceConfig,
     ) -> list[ResultEnvelope]:
         assert request.include_raw is False
+        self.search_calls.append(source_config.source_id)
         if source_config.source_id == "vehicle_log_primary":
             return [
                 ResultEnvelope(
@@ -283,9 +290,18 @@ class FakeContextPackConnector:
                     ),
                     confidence=Confidence.HIGH,
                     raw={
-                        "spreadsheet_id": "sheet-secret-id",
-                        "values_by_header": {"Comments/Repair Notes": "Engine oil"},
+                        "spreadsheet_id": "raw-spreadsheet-id-sentinel",
+                        "private_url": "https://private.example.test/spreadsheet",
+                        "credential_ref": "credential-reference-sentinel",
+                        "source_config": {"worksheet": "private-config-sentinel"},
+                        "row_payload": {"private": "raw-row-payload-sentinel"},
                     },
+                    available_context=[
+                        AvailableContext(
+                            context_mode="nearby_rows",
+                            description="Fetch nearby rows.",
+                        )
+                    ],
                     warnings=["maintenance_summary"],
                 ),
                 ResultEnvelope(
@@ -320,7 +336,16 @@ class FakeContextPackConnector:
                         "Location: Main Arena"
                     ),
                     confidence=Confidence.HIGH,
-                    raw={"url": "https://private.example.test/calendar.ics"},
+                    raw={
+                        "url": "https://private.example.test/calendar.ics",
+                        "event_payload": "raw-event-payload-sentinel",
+                    },
+                    available_context=[
+                        AvailableContext(
+                            context_mode="upcoming_events",
+                            description="Fetch upcoming events from this calendar.",
+                        )
+                    ],
                     warnings=["timezone_inferred"],
                 )
             ]
@@ -332,6 +357,7 @@ class FakeContextPackConnector:
         request: FetchRequest,
         source_config: SourceConfig,
     ) -> list[ResultEnvelope]:
+        self.fetch_call_count += 1
         raise ServiceError(
             "unsupported_operation",
             "Connector does not support fetch in this test.",
@@ -344,6 +370,7 @@ class FakeContextPackConnector:
         request: ContextRequest,
         source_config: SourceConfig,
     ) -> list[ResultEnvelope]:
+        self.context_call_count += 1
         raise ServiceError(
             "unsupported_operation",
             "Connector does not support context in this test.",
@@ -961,15 +988,51 @@ async def test_context_pack_route_returns_compact_google_sheets_items(
         == "google_sheets:vehicle_log_primary:'Form responses 1'!A13:I13"
     )
     assert "Engine oil and transfer case service." in payload["items"][0]["text"]
+    assert payload["items"][0]["available_context"] == [
+        {
+            "context_mode": "nearby_rows",
+            "description": "Fetch nearby rows.",
+        }
+    ]
+    assert payload["items"][1]["available_context"] == []
     assert payload["items"][0]["warnings"] == ["maintenance_summary"]
     assert "raw" not in payload["items"][0]
-    assert "sheet-secret-id" not in json.dumps(payload)
+    serialized_payload = json.dumps(payload)
+    for sentinel in (
+        "raw-spreadsheet-id-sentinel",
+        "private.example.test",
+        "credential-reference-sentinel",
+        "private-config-sentinel",
+        "raw-row-payload-sentinel",
+    ):
+        assert sentinel not in serialized_payload
+    assert fake_context_pack_connector.search_calls == ["vehicle_log_primary"]
+    assert fake_context_pack_connector.fetch_call_count == 0
+    assert fake_context_pack_connector.context_call_count == 0
 
     audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert set(audit_event) == {
+        "event_id",
+        "timestamp",
+        "operation",
+        "caller",
+        "source_ids",
+        "query",
+        "source_ref",
+        "result_count",
+        "estimated_bytes",
+        "status",
+        "error_code",
+    }
     assert audit_event["operation"] == "context_pack"
     assert audit_event["status"] == "success"
     assert audit_event["result_count"] == 2
-    assert "sheet-secret-id" not in json.dumps(audit_event)
+    assert audit_event["estimated_bytes"] == payload["budget"]["estimated_bytes"]
+    serialized_audit = json.dumps(audit_event)
+    assert "nearby_rows" not in serialized_audit
+    assert "Fetch nearby rows." not in serialized_audit
+    assert "raw-spreadsheet-id-sentinel" not in serialized_audit
+    assert "credential-reference-sentinel" not in serialized_audit
 
 
 @pytest.mark.anyio
@@ -1009,9 +1072,64 @@ async def test_context_pack_route_returns_compact_ics_items_and_hides_private_de
         == "ics_calendar:calendar_sports:event:sports-team-home-20261010"
     )
     assert payload["items"][0]["source_modified_at"] == "2026-06-01T00:00:00Z"
+    assert payload["items"][0]["available_context"] == [
+        {
+            "context_mode": "upcoming_events",
+            "description": "Fetch upcoming events from this calendar.",
+        }
+    ]
     assert payload["items"][0]["warnings"] == ["timezone_inferred"]
     assert "raw" not in payload["items"][0]
     assert "private.example.test" not in json.dumps(payload)
+    assert "raw-event-payload-sentinel" not in json.dumps(payload)
+    assert fake_context_pack_connector.search_calls == ["calendar_sports"]
+    assert fake_context_pack_connector.fetch_call_count == 0
+    assert fake_context_pack_connector.context_call_count == 0
+
+
+def test_context_pack_projection_preserves_multiple_descriptors_without_native_fields() -> None:
+    result = ResultEnvelope(
+        result_id="r_generic_1",
+        source_type="generic",
+        source_id="source_generic",
+        source_name="Generic Source",
+        source_ref="generic:source_generic:item-1",
+        retrieved_at=datetime(2026, 6, 10, tzinfo=UTC),
+        title="Generic result",
+        content_type="text",
+        text="Bounded evidence text.",
+        url="https://private.example.test/item-1",
+        raw={"private": "native-payload-sentinel"},
+        available_context=[
+            AvailableContext(
+                context_mode="preceding",
+                description="Fetch preceding context.",
+            ),
+            AvailableContext(
+                context_mode="following",
+                description="Fetch following context.",
+            ),
+        ],
+    )
+
+    compact = context_pack_service._build_context_pack_item(result).model_dump(
+        mode="json"
+    )
+
+    assert compact["available_context"] == [
+        {
+            "context_mode": "preceding",
+            "description": "Fetch preceding context.",
+        },
+        {
+            "context_mode": "following",
+            "description": "Fetch following context.",
+        },
+    ]
+    assert "raw" not in compact
+    assert "url" not in compact
+    assert "native-payload-sentinel" not in json.dumps(compact)
+    assert "private.example.test" not in json.dumps(compact)
 
 
 @pytest.mark.anyio
@@ -1052,6 +1170,63 @@ async def test_context_pack_route_enforces_budget_limits(
         "estimated_bytes": payload["budget"]["estimated_bytes"],
         "truncated": True,
     }
+
+
+@pytest.mark.anyio
+async def test_context_pack_route_counts_descriptor_bytes_in_item_budget(
+    tmp_path: Path,
+    monkeypatch,
+    fake_context_pack_connector,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_source_config(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        successful_response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "maintenance",
+                "source_ids": ["vehicle_log_primary"],
+                "allowed_sensitivity": "medium",
+                "budget": {
+                    "max_results": 1,
+                    "max_bytes": 50000,
+                    "max_text_chars": 12000,
+                },
+            },
+        )
+        successful_payload = successful_response.json()
+        retained_item = successful_payload["items"][0]
+        serialized_item_bytes = len(json.dumps(retained_item).encode("utf-8"))
+        item_without_descriptors = {
+            **retained_item,
+            "available_context": [],
+        }
+        bytes_without_descriptors = len(
+            json.dumps(item_without_descriptors).encode("utf-8")
+        )
+        oversized_response = await client.post(
+            "/v1/context-pack",
+            json={
+                "query": "maintenance",
+                "source_ids": ["vehicle_log_primary"],
+                "allowed_sensitivity": "medium",
+                "budget": {
+                    "max_results": 1,
+                    "max_bytes": bytes_without_descriptors,
+                    "max_text_chars": 12000,
+                },
+            },
+        )
+
+    assert successful_response.status_code == 200
+    assert successful_payload["budget"]["estimated_bytes"] == serialized_item_bytes
+    assert serialized_item_bytes > bytes_without_descriptors
+    assert oversized_response.status_code == 413
+    assert oversized_response.json()["error"]["code"] == "result_too_large"
 
 
 @pytest.mark.anyio
