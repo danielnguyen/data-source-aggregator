@@ -44,6 +44,16 @@ Real source configs live in `config/sources/*.yaml` and are gitignored by defaul
 
 Committed files under `config/sources/*.example.yaml` are examples only.
 
+Each source may declare:
+
+```yaml
+authority_role: authoritative
+```
+
+Allowed values are `authoritative`, `supplemental`, and `unknown`. The field is
+operator-configured and is never inferred from source names, tags, connectors,
+health, or retrieval results. Omitted values default to `unknown`.
+
 ## Local files (gitignored)
 
 - `config/sources/*.yaml`
@@ -63,6 +73,7 @@ domain_tags:
   - maintenance
 connector: google_sheets
 enabled: true
+authority_role: unknown
 sensitivity: medium
 access_mode: read_only
 
@@ -101,6 +112,7 @@ domain_tags:
   - sports
 connector: ics_calendar
 enabled: true
+authority_role: unknown
 sensitivity: low
 access_mode: read_only
 
@@ -140,6 +152,25 @@ List sources:
 ```bash
 curl http://localhost:8000/v1/sources
 ```
+
+The response reports the bounded configured-source inventory:
+
+```json
+{
+  "inventory_scope": "configured_sources",
+  "inventory_status": "complete",
+  "sources": []
+}
+```
+
+`complete` means every non-example source config in the resolved source-config
+directory was represented. It does not mean every potentially relevant
+real-world source was configured. Valid disabled and currently unavailable
+sources remain represented and do not reduce inventory completeness. An invalid
+disabled config that is deliberately omitted produces `partial`; a missing
+source-config directory produces `unknown`. Source and credential configuration,
+paths, environment references, URLs, secrets, and raw YAML are not exposed by
+the source inventory API.
 
 If `DSA_API_KEY` is set, include the header:
 

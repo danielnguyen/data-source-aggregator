@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.audit import AuditLogWriter
-from app.config import get_dsa_api_key, load_source_configs
+from app.config import get_dsa_api_key, load_source_config_inventory
 from app.errors import ServiceError
 from app.models import (
     ContextPackRequest,
@@ -86,7 +86,11 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
         _require_api_key(request)
         await _ensure_source_registry_loaded(request.app)
         registry = _get_registry(request)
-        return SourceListResponse(sources=registry.list_sources())
+        return SourceListResponse(
+            inventory_scope="configured_sources",
+            inventory_status=registry.inventory_status,
+            sources=registry.list_sources(),
+        )
 
     @app.get("/v1/sources/{source_id}", response_model=SourceDetailResponse)
     async def get_source(source_id: str, request: Request) -> SourceDetailResponse:
@@ -176,14 +180,17 @@ def _require_api_key(request: Request) -> None:
 
 async def _ensure_source_registry_loaded(app: FastAPI) -> None:
     registry: SourceRegistry = app.state.source_registry
-    if registry.list_sources():
+    if registry.loaded:
         return
     await _refresh_source_registry(app, app.state.source_config_dir)
 
 
 async def _refresh_source_registry(app: FastAPI, source_config_dir: Path | None) -> None:
-    source_configs = load_source_configs(source_config_dir)
-    app.state.source_registry = await build_source_registry(source_configs)
+    load_result = load_source_config_inventory(source_config_dir)
+    app.state.source_registry = await build_source_registry(
+        load_result.source_configs,
+        inventory_status=load_result.inventory_status,
+    )
 
 
 app = create_app()

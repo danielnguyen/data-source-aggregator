@@ -6,6 +6,7 @@ domain_tags:
   - maintenance
 connector: google_sheets
 enabled: true
+authority_role: unknown
 
 sensitivity: medium
 access_mode: read_only

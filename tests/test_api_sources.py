@@ -5,6 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+import app.main as main_module
 from app.connectors import base as connector_base
 from app.main import create_app
 from app.models import (
@@ -29,6 +30,44 @@ credentials:
         encoding="utf-8",
     )
     monkeypatch.setenv("CREDENTIALS_CONFIG_PATH", str(credentials_path))
+
+
+def _write_ics_source(
+    source_dir: Path,
+    filename: str,
+    *,
+    source_id: str,
+    enabled: bool = True,
+    authority_role: str | None = None,
+    description: str = "Configured calendar source.",
+) -> None:
+    authority_line = (
+        f"authority_role: {authority_role}\n"
+        if authority_role is not None
+        else ""
+    )
+    (source_dir / filename).write_text(
+        f"""
+source_id: {source_id}
+display_name: Configured Calendar
+description: {description}
+domain_tags: [calendar]
+connector: ics_calendar
+enabled: {str(enabled).lower()}
+{authority_line}sensitivity: low
+access_mode: read_only
+connector_config:
+  url: https://private.example.test/{source_id}.ics
+  timezone: UTC
+retrieval:
+  default_mode: targeted
+  max_results: 10
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: false
+""",
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.anyio
@@ -97,6 +136,7 @@ description: Personal vehicle operating records.
 domain_tags: [vehicle, maintenance]
 connector: google_sheets
 enabled: true
+authority_role: authoritative
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -122,6 +162,9 @@ retrieval:
 
     assert list_response.status_code == 200
     payload = list_response.json()
+    assert set(payload) == {"inventory_scope", "inventory_status", "sources"}
+    assert payload["inventory_scope"] == "configured_sources"
+    assert payload["inventory_status"] == "complete"
     assert payload["sources"][0]["source_id"] == "vehicle_log_primary"
     assert payload["sources"][0]["display_name"] == "Vehicle Log - Primary"
     assert payload["sources"][0]["domain_tags"] == ["vehicle", "maintenance"]
@@ -129,6 +172,7 @@ retrieval:
     assert payload["sources"][0]["last_checked_at"] == "2026-06-10T00:00:00Z"
     assert payload["sources"][0]["last_error"] is None
     assert payload["sources"][0]["capabilities"] == ["profile", "search", "fetch", "context"]
+    assert payload["sources"][0]["authority_role"] == "authoritative"
     assert "connector_config" not in payload["sources"][0]
     assert "sheet-secret-id" not in str(payload)
 
@@ -137,6 +181,7 @@ retrieval:
     assert detail_payload["source"]["retrieval"]["default_mode"] == "targeted"
     assert detail_payload["source"]["display_name"] == "Vehicle Log - Primary"
     assert detail_payload["source"]["domain_tags"] == ["vehicle", "maintenance"]
+    assert detail_payload["source"]["authority_role"] == "authoritative"
     assert detail_payload["source"]["status"] == "ready"
     assert detail_payload["source"]["last_checked_at"] == "2026-06-10T00:00:00Z"
     assert detail_payload["source"]["last_error"] is None
@@ -175,6 +220,7 @@ description: Sports schedule source.
 domain_tags: [calendar, sports]
 connector: ics_calendar
 enabled: true
+authority_role: supplemental
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -198,6 +244,9 @@ retrieval:
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["inventory_scope"] == "configured_sources"
+    assert payload["inventory_status"] == "complete"
+    assert payload["sources"][0]["authority_role"] == "supplemental"
     assert payload["sources"][0]["status"] == "unavailable"
     assert payload["sources"][0]["last_error"] == "source_unavailable"
     assert "private.example.test" not in str(payload)
@@ -376,3 +425,136 @@ async def test_health_route_remains_open_when_api_key_is_configured(
         "status": "ok",
         "service": "data-source-aggregator",
     }
+
+
+@pytest.mark.anyio
+async def test_empty_and_missing_source_directories_have_distinct_statuses(
+    tmp_path: Path,
+) -> None:
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    missing_dir = tmp_path / "missing"
+
+    empty_transport = httpx.ASGITransport(
+        app=create_app(source_config_dir=empty_dir)
+    )
+    missing_transport = httpx.ASGITransport(
+        app=create_app(source_config_dir=missing_dir)
+    )
+    async with (
+        httpx.AsyncClient(
+            transport=empty_transport,
+            base_url="http://empty",
+        ) as empty_client,
+        httpx.AsyncClient(
+            transport=missing_transport,
+            base_url="http://missing",
+        ) as missing_client,
+    ):
+        empty_response = await empty_client.get("/v1/sources")
+        missing_response = await missing_client.get("/v1/sources")
+
+    assert empty_response.json() == {
+        "inventory_scope": "configured_sources",
+        "inventory_status": "complete",
+        "sources": [],
+    }
+    assert missing_response.json() == {
+        "inventory_scope": "configured_sources",
+        "inventory_status": "unknown",
+        "sources": [],
+    }
+
+
+@pytest.mark.anyio
+async def test_truthfully_loaded_empty_registry_is_not_reloaded(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    calls = 0
+    original_loader = main_module.load_source_config_inventory
+
+    def counted_loader(config_dir):
+        nonlocal calls
+        calls += 1
+        return original_loader(config_dir)
+
+    monkeypatch.setattr(
+        main_module,
+        "load_source_config_inventory",
+        counted_loader,
+    )
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        first = await client.get("/v1/sources")
+        second = await client.get("/v1/sources")
+
+    assert first.json() == second.json()
+    assert first.json()["inventory_status"] == "complete"
+    assert first.json()["sources"] == []
+    assert calls == 1
+
+
+@pytest.mark.anyio
+async def test_partial_empty_inventory_stays_loaded_and_excludes_rejected_config(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_ics_source(
+        source_dir,
+        "invalid-disabled.yaml",
+        source_id="invalid_calendar",
+        enabled=False,
+        authority_role="owner_declared",
+        description="PRIVATE REJECTED SOURCE CONTENT",
+    )
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+
+    with pytest.warns(UserWarning, match="invalid-disabled.yaml"):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            first = await client.get("/v1/sources")
+            second = await client.get("/v1/sources")
+
+    assert first.json() == {
+        "inventory_scope": "configured_sources",
+        "inventory_status": "partial",
+        "sources": [],
+    }
+    assert second.json() == first.json()
+    assert "PRIVATE REJECTED SOURCE CONTENT" not in first.text
+
+
+@pytest.mark.anyio
+async def test_valid_disabled_source_is_represented_in_complete_inventory(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_ics_source(
+        source_dir,
+        "disabled.yaml",
+        source_id="disabled_calendar",
+        enabled=False,
+        authority_role="unknown",
+    )
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/v1/sources")
+
+    assert response.status_code == 200
+    assert response.json()["inventory_status"] == "complete"
+    assert response.json()["sources"][0]["source_id"] == "disabled_calendar"
+    assert response.json()["sources"][0]["status"] == "disabled"
+    assert response.json()["sources"][0]["authority_role"] == "unknown"
