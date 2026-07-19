@@ -300,7 +300,14 @@ class FakeContextPackConnector:
                         AvailableContext(
                             context_mode="nearby_rows",
                             description="Fetch nearby rows.",
-                        )
+                        ),
+                        AvailableContext(
+                            context_mode="configured_worksheet",
+                            description=(
+                                "Fetch every non-empty record from the configured "
+                                "worksheet."
+                            ),
+                        ),
                     ],
                     warnings=["maintenance_summary"],
                 ),
@@ -592,8 +599,10 @@ class FakeMultiSourceContextPackConnector:
 class MultiSourceFakeGoogleSheetsClient(GoogleSheetsClient):
     def __init__(self, values_by_spreadsheet_id: dict[str, dict[str, list[list[str]]]]) -> None:
         self._values_by_spreadsheet_id = values_by_spreadsheet_id
+        self.calls: list[tuple[str, str]] = []
 
     def get_values(self, spreadsheet_id: str, range_name: str) -> list[list[str]]:
+        self.calls.append((spreadsheet_id, range_name))
         return self._values_by_spreadsheet_id[spreadsheet_id][range_name]
 
 
@@ -711,6 +720,45 @@ def real_multi_source_context_pack_connectors(monkeypatch):
     monkeypatch.setattr(context_pack_service.connector_base, "get_connector", get_connector)
     monkeypatch.setattr(registry_module, "get_connector", get_connector)
     return google_connector
+
+
+@pytest.fixture
+def configured_worksheet_api_connector(monkeypatch):
+    rows = [
+        ["Date", "Task", "Notes"],
+        [
+            "2026-05-01",
+            "Oil change",
+            "Routine service",
+            "RAW OUTSIDE CONFIGURED RECORD FIELDS",
+        ],
+        [],
+        ["2026-05-12", "Battery replacement", "Replaced after slow crank"],
+        ["2026-05-20", "Inspection", "Tire rotation completed"],
+    ]
+    client = MultiSourceFakeGoogleSheetsClient(
+        {
+            "sheet-secret-id": {
+                "Maintenance": rows,
+                "Maintenance!A1:A1": [rows[0]],
+            }
+        }
+    )
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: client,
+        now_factory=lambda: datetime(2026, 6, 10, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        fetch_service.connector_base,
+        "get_connector",
+        lambda _: connector,
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "get_connector",
+        lambda _: connector,
+    )
+    return connector, client
 
 
 @pytest.mark.anyio
@@ -950,6 +998,166 @@ async def test_fetch_route_rejects_invalid_source_ref(
 
 
 @pytest.mark.anyio
+async def test_configured_worksheet_context_route_returns_complete_raw_free_range(
+    tmp_path: Path,
+    monkeypatch,
+    configured_worksheet_api_connector,
+) -> None:
+    _, google_client = configured_worksheet_api_connector
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_source_config(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/v1/sources/context",
+            json={
+                "source_ref": (
+                    "google_sheets:vehicle_log_primary:Maintenance!A4:C4"
+                ),
+                "context_mode": "configured_worksheet",
+                "budget": {
+                    "max_rows": 20,
+                    "max_bytes": 50000,
+                    "max_text_chars": 12000,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answerable"] is True
+    assert payload["retrieval_mode"] == "context"
+    assert payload["warnings"] == []
+    assert payload["errors"] == []
+    assert len(payload["results"]) == 1
+    result = payload["results"][0]
+    assert result["source_ref"] == (
+        "google_sheets:vehicle_log_primary:Maintenance!A2:C5"
+    )
+    assert result["content_type"] == "spreadsheet_range"
+    assert result["title"] == "Maintenance rows 2-5"
+    assert result["text"] == (
+        "Date: 2026-05-01\n"
+        "Task: Oil change\n"
+        "Notes: Routine service\n\n"
+        "Date: 2026-05-12\n"
+        "Task: Battery replacement\n"
+        "Notes: Replaced after slow crank\n\n"
+        "Date: 2026-05-20\n"
+        "Task: Inspection\n"
+        "Notes: Tire rotation completed"
+    )
+    assert result["raw"] is None
+    assert result["available_context"] == []
+    assert payload["budget"] == {
+        "max_results": 20,
+        "returned_results": 1,
+        "estimated_bytes": len(json.dumps(result).encode("utf-8")),
+        "truncated": False,
+    }
+    serialized_payload = json.dumps(payload)
+    for sentinel in (
+        "sheet-secret-id",
+        "google_sheets_readonly",
+        "RAW OUTSIDE CONFIGURED RECORD FIELDS",
+    ):
+        assert sentinel not in serialized_payload
+
+    assert google_client.calls == [
+        ("sheet-secret-id", "Maintenance!A1:A1"),
+        ("sheet-secret-id", "Maintenance"),
+    ]
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["operation"] == "context"
+    assert audit_event["result_count"] == 1
+    assert audit_event["estimated_bytes"] == payload["budget"]["estimated_bytes"]
+    assert audit_event["status"] == "success"
+    serialized_audit = json.dumps(audit_event)
+    for private_value in (
+        "Oil change",
+        "Battery replacement",
+        "configured_worksheet",
+        "Fetch every non-empty record",
+        "sheet-secret-id",
+        "google_sheets_readonly",
+    ):
+        assert private_value not in serialized_audit
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "budget",
+    [
+        {"max_rows": 2, "max_bytes": 50000, "max_text_chars": 12000},
+        {"max_rows": 20, "max_bytes": 100, "max_text_chars": 12000},
+        {"max_rows": 20, "max_bytes": 50000, "max_text_chars": 20},
+    ],
+    ids=["row-limit", "byte-limit", "text-limit"],
+)
+async def test_configured_worksheet_context_route_fails_without_partial_results(
+    tmp_path: Path,
+    monkeypatch,
+    configured_worksheet_api_connector,
+    budget: dict[str, int],
+) -> None:
+    _, google_client = configured_worksheet_api_connector
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_source_config(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/v1/sources/context",
+            json={
+                "source_ref": (
+                    "google_sheets:vehicle_log_primary:Maintenance!A4:C4"
+                ),
+                "context_mode": "configured_worksheet",
+                "budget": budget,
+            },
+        )
+
+    assert response.status_code == 413
+    payload = response.json()
+    assert payload["error"]["code"] == "result_too_large"
+    serialized_payload = json.dumps(payload)
+    for private_value in (
+        "Oil change",
+        "Battery replacement",
+        "RAW OUTSIDE CONFIGURED RECORD FIELDS",
+        "sheet-secret-id",
+        "google_sheets_readonly",
+    ):
+        assert private_value not in serialized_payload
+    assert google_client.calls == [
+        ("sheet-secret-id", "Maintenance!A1:A1"),
+        ("sheet-secret-id", "Maintenance"),
+    ]
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["operation"] == "context"
+    assert audit_event["result_count"] == 0
+    assert audit_event["estimated_bytes"] == 0
+    assert audit_event["status"] == "error"
+    assert audit_event["error_code"] == "result_too_large"
+    assert "Oil change" not in json.dumps(audit_event)
+
+
+@pytest.mark.anyio
 async def test_context_pack_route_returns_compact_google_sheets_items(
     tmp_path: Path,
     monkeypatch,
@@ -992,7 +1200,13 @@ async def test_context_pack_route_returns_compact_google_sheets_items(
         {
             "context_mode": "nearby_rows",
             "description": "Fetch nearby rows.",
-        }
+        },
+        {
+            "context_mode": "configured_worksheet",
+            "description": (
+                "Fetch every non-empty record from the configured worksheet."
+            ),
+        },
     ]
     assert payload["items"][1]["available_context"] == []
     assert payload["items"][0]["warnings"] == ["maintenance_summary"]
@@ -1031,6 +1245,11 @@ async def test_context_pack_route_returns_compact_google_sheets_items(
     serialized_audit = json.dumps(audit_event)
     assert "nearby_rows" not in serialized_audit
     assert "Fetch nearby rows." not in serialized_audit
+    assert "configured_worksheet" not in serialized_audit
+    assert (
+        "Fetch every non-empty record from the configured worksheet."
+        not in serialized_audit
+    )
     assert "raw-spreadsheet-id-sentinel" not in serialized_audit
     assert "credential-reference-sentinel" not in serialized_audit
 

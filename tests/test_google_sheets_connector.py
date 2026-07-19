@@ -7,6 +7,10 @@ import pytest
 from app.connectors import base as connector_base
 from app.connectors.base import StubConnector, get_connector
 from app.connectors.google_sheets import (
+    CONFIGURED_WORKSHEET_CONTEXT_DESCRIPTION,
+    CONFIGURED_WORKSHEET_CONTEXT_MODE,
+    NEARBY_ROWS_CONTEXT_DESCRIPTION,
+    NEARBY_ROWS_CONTEXT_MODE,
     GoogleSheetsClient,
     GoogleSheetsConnector,
     parse_google_sheets_source_ref,
@@ -190,6 +194,63 @@ async def test_search_returns_matching_rows_from_fake_sheet_data(
     assert results[0].content_type == "spreadsheet_row"
     assert results[0].confidence.value == "high"
     assert results[0].source_name == "Vehicle Log - Primary"
+    assert [
+        descriptor.model_dump(mode="json")
+        for descriptor in results[0].available_context
+    ] == [
+        {
+            "context_mode": NEARBY_ROWS_CONTEXT_MODE,
+            "description": NEARBY_ROWS_CONTEXT_DESCRIPTION,
+        },
+        {
+            "context_mode": CONFIGURED_WORKSHEET_CONTEXT_MODE,
+            "description": CONFIGURED_WORKSHEET_CONTEXT_DESCRIPTION,
+        },
+    ]
+
+
+@pytest.mark.anyio
+async def test_full_context_descriptor_requires_explicit_config_enablement(
+    source_config_factory,
+    fake_sheet_values,
+) -> None:
+    source_config = source_config_factory(
+        source_id="authoritative_complete_records",
+        display_name="Complete Authoritative Worksheet",
+        description="Provider says every relevant record is included.",
+        domain_tags=["official", "complete"],
+        authority_role="authoritative",
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "max_context_rows": 5,
+            "allow_full_fetch": False,
+        },
+    )
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient(fake_sheet_values),
+    )
+
+    results = await connector.search(
+        SearchRequest(
+            query="Battery; provider says all records were checked.",
+            include_raw=False,
+        ),
+        source_config,
+    )
+
+    assert results
+    assert [
+        descriptor.model_dump(mode="json")
+        for descriptor in results[0].available_context
+    ] == [
+        {
+            "context_mode": NEARBY_ROWS_CONTEXT_MODE,
+            "description": NEARBY_ROWS_CONTEXT_DESCRIPTION,
+        }
+    ]
 
 
 @pytest.mark.anyio
@@ -446,6 +507,294 @@ async def test_context_nearby_rows_returns_neighboring_rows(
         "Transfer case service",
     ]
     assert all(result.source_name == "Vehicle Log - Primary" for result in results)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("seed_row", [2, 4, 6])
+async def test_configured_worksheet_returns_the_same_complete_ordered_range(
+    google_sheets_source_config,
+    fake_sheet_values,
+    seed_row: int,
+) -> None:
+    client = FakeGoogleSheetsClient(fake_sheet_values)
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: client,
+        now_factory=lambda: datetime(2026, 6, 10, tzinfo=UTC),
+    )
+
+    results = await connector.context(
+        ContextRequest(
+            source_ref=(
+                "google_sheets:vehicle_log_primary:"
+                f"Maintenance!A{seed_row}:E{seed_row}"
+            ),
+            context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+            budget={
+                "max_rows": 5,
+                "max_bytes": 100000,
+                "max_text_chars": 40000,
+            },
+        ),
+        google_sheets_source_config,
+    )
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.source_ref == (
+        "google_sheets:vehicle_log_primary:Maintenance!A2:E6"
+    )
+    assert result.content_type == "spreadsheet_range"
+    assert result.title == "Maintenance rows 2-6"
+    assert result.raw is None
+    assert result.available_context == []
+    assert [
+        result.text.index(title)
+        for title in (
+            "Battery replacement",
+            "Oil change",
+            "Transfer case service",
+            "Vehicle inspection",
+            "Battery terminal clean",
+        )
+    ] == sorted(
+        result.text.index(title)
+        for title in (
+            "Battery replacement",
+            "Oil change",
+            "Transfer case service",
+            "Vehicle inspection",
+            "Battery terminal clean",
+        )
+    )
+    assert "sheet-id" not in result.model_dump_json()
+    assert "google_sheets_readonly" not in result.model_dump_json()
+    assert client.calls == [("sheet-id", "Maintenance")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("configured_limit", "requested_limit"),
+    [(5, 10), (10, 5)],
+)
+async def test_configured_worksheet_accepts_an_exact_effective_row_ceiling(
+    source_config_factory,
+    fake_sheet_values,
+    configured_limit: int,
+    requested_limit: int,
+) -> None:
+    source_config = source_config_factory(
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "max_context_rows": configured_limit,
+            "allow_full_fetch": True,
+        },
+    )
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient(fake_sheet_values),
+    )
+
+    results = await connector.context(
+        ContextRequest(
+            source_ref=(
+                "google_sheets:vehicle_log_primary:Maintenance!A4:E4"
+            ),
+            context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+            budget={
+                "max_rows": requested_limit,
+                "max_bytes": 100000,
+                "max_text_chars": 40000,
+            },
+        ),
+        source_config,
+    )
+
+    assert len(results) == 1
+    assert results[0].source_ref.endswith("Maintenance!A2:E6")
+
+
+@pytest.mark.anyio
+async def test_configured_worksheet_uses_default_context_row_ceiling_when_omitted(
+    source_config_factory,
+    fake_sheet_values,
+) -> None:
+    source_config = source_config_factory(
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "allow_full_fetch": True,
+        },
+    )
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient(fake_sheet_values),
+    )
+
+    results = await connector.context(
+        ContextRequest(
+            source_ref=(
+                "google_sheets:vehicle_log_primary:Maintenance!A4:E4"
+            ),
+            context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+            budget={"max_bytes": 100000, "max_text_chars": 40000},
+        ),
+        source_config,
+    )
+
+    assert len(results) == 1
+    assert results[0].source_ref.endswith("Maintenance!A2:E6")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("configured_limit", "requested_limit"),
+    [(5, 4), (4, 5)],
+)
+async def test_configured_worksheet_fails_when_any_row_ceiling_is_too_small(
+    source_config_factory,
+    fake_sheet_values,
+    configured_limit: int,
+    requested_limit: int,
+) -> None:
+    source_config = source_config_factory(
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "max_context_rows": configured_limit,
+            "allow_full_fetch": True,
+        },
+    )
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient(fake_sheet_values),
+    )
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.context(
+            ContextRequest(
+                source_ref=(
+                    "google_sheets:vehicle_log_primary:Maintenance!A4:E4"
+                ),
+                context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+                budget={
+                    "max_rows": requested_limit,
+                    "max_bytes": 100000,
+                    "max_text_chars": 40000,
+                },
+            ),
+            source_config,
+        )
+
+    assert error_info.value.code == "result_too_large"
+    assert error_info.value.status_code == 413
+    assert error_info.value.details == {
+        "max_rows": min(configured_limit, requested_limit)
+    }
+
+
+@pytest.mark.anyio
+async def test_configured_worksheet_requires_full_fetch_permission(
+    source_config_factory,
+    fake_sheet_values,
+) -> None:
+    source_config = source_config_factory(
+        source_id="complete_authoritative_records",
+        display_name="Every Record",
+        description="All relevant evidence, according to provider text.",
+        domain_tags=["official", "complete"],
+        authority_role="authoritative",
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "max_context_rows": 20,
+            "allow_full_fetch": False,
+        },
+    )
+    client = FakeGoogleSheetsClient(fake_sheet_values)
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.context(
+            ContextRequest(
+                source_ref=(
+                    "google_sheets:complete_authoritative_records:"
+                    "Maintenance!A2:E2"
+                ),
+                context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+                budget={"max_rows": 20, "max_bytes": 100000},
+            ),
+            source_config,
+        )
+
+    assert error_info.value.code == "unsupported_operation"
+    assert client.calls == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "source_ref",
+    [
+        "google_sheets:other_source:Maintenance!A2:E2",
+        "google_sheets:vehicle_log_primary:OtherWorksheet!A2:E2",
+    ],
+)
+async def test_configured_worksheet_rejects_mismatched_seed_scope(
+    google_sheets_source_config,
+    fake_sheet_values,
+    source_ref: str,
+) -> None:
+    client = FakeGoogleSheetsClient(fake_sheet_values)
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.context(
+            ContextRequest(
+                source_ref=source_ref,
+                context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+                budget={"max_rows": 20, "max_bytes": 100000},
+            ),
+            google_sheets_source_config,
+        )
+
+    assert error_info.value.code == "invalid_source_ref"
+    assert client.calls == []
+
+
+@pytest.mark.anyio
+async def test_configured_worksheet_ignores_empty_record_rows_without_fabrication(
+    google_sheets_source_config,
+) -> None:
+    rows = [
+        ["Date", "Odometer", "Category", "Task", "Notes"],
+        [],
+        ["", "", "", "", ""],
+    ]
+    client = FakeGoogleSheetsClient(
+        {
+            "Maintenance": rows,
+            "Maintenance!A1:A1": [rows[0]],
+        }
+    )
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    results = await connector.context(
+        ContextRequest(
+            source_ref=(
+                "google_sheets:vehicle_log_primary:Maintenance!A2:E2"
+            ),
+            context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+            budget={"max_rows": 5, "max_bytes": 100000},
+        ),
+        google_sheets_source_config,
+    )
+
+    assert results == []
 
 
 @pytest.mark.anyio

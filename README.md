@@ -229,6 +229,47 @@ curl -X POST http://localhost:8000/v1/sources/context \
   }'
 ```
 
+Google Sheets sources with `retrieval.allow_full_fetch: true` also declare the
+`configured_worksheet` context mode:
+
+```json
+{
+  "context_mode": "configured_worksheet",
+  "description": "Fetch every non-empty record from the configured worksheet."
+}
+```
+
+This operation is bounded to the one spreadsheet and worksheet named by the
+validated source configuration. It reads every non-empty record after the
+configured header row, preserves worksheet order, and returns one raw-free
+`spreadsheet_range`. It does not cover other worksheets, spreadsheets, source
+configurations, or potentially relevant real-world sources.
+
+Both the configured `max_context_rows` ceiling (default `20` when omitted) and
+the request `budget.max_rows` ceiling apply. The existing configured and request
+byte and text limits also apply. If the complete record set exceeds any
+effective limit, the request fails with `result_too_large`; the connector does
+not return a prefix, summary, nearby-row substitute, or other partial success.
+An empty configured worksheet returns an empty context response without
+fabricating absence evidence.
+
+```bash
+curl -X POST http://localhost:8000/v1/sources/context \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_ref": "google_sheets:vehicle_log_example:Maintenance!A12:H12",
+    "context_mode": "configured_worksheet",
+    "budget": {
+      "max_rows": 20,
+      "max_bytes": 50000,
+      "max_text_chars": 12000
+    }
+  }'
+```
+
+The mode is an acquisition capability, not an exhaustive conclusion by itself.
+Sources with `allow_full_fetch: false` do not advertise or execute it.
+
 Context pack:
 
 Returns compact evidence for downstream assistants. This endpoint does not generate an answer, and raw payloads are omitted by default.
@@ -281,6 +322,10 @@ Example response:
         {
           "context_mode": "nearby_rows",
           "description": "Fetch nearby rows."
+        },
+        {
+          "context_mode": "configured_worksheet",
+          "description": "Fetch every non-empty record from the configured worksheet."
         }
       ],
       "warnings": []
