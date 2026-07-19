@@ -4,8 +4,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.connectors.base import capabilities_for_connector, get_connector
+from app.errors import SourceConfigValidationError
 from app.models import (
+    MAX_SOURCE_COUNT,
     ContextPackSourceDiagnostic,
+    InventoryStatus,
     Sensitivity,
     SourceConfig,
     SourceHealth,
@@ -34,11 +37,25 @@ class SourceRegistry:
         self,
         entries: list[SourceRegistryDetail],
         source_configs: list[SourceConfig],
+        *,
+        inventory_status: InventoryStatus,
+        loaded: bool,
     ) -> None:
         self._entries = {entry.source_id: entry for entry in entries}
         self._source_configs = {
-            source_config.source_id: source_config for source_config in source_configs
+            source_config.source_id: source_config
+            for source_config in source_configs
         }
+        self._inventory_status = inventory_status
+        self._loaded = loaded
+
+    @property
+    def inventory_status(self) -> InventoryStatus:
+        return self._inventory_status
+
+    @property
+    def loaded(self) -> bool:
+        return self._loaded
 
     def list_sources(self) -> list[SourceRegistryEntry]:
         return [
@@ -224,7 +241,12 @@ class SourceRegistry:
         return strongest_source.score < 7 and len(strongest_source.matched_terms) < 2
 
 
-async def build_source_registry(source_configs: list[SourceConfig]) -> SourceRegistry:
+async def build_source_registry(
+    source_configs: list[SourceConfig],
+    *,
+    inventory_status: InventoryStatus = InventoryStatus.COMPLETE,
+) -> SourceRegistry:
+    _validate_source_configs(source_configs)
     entries: list[SourceRegistryDetail] = []
 
     for source_config in source_configs:
@@ -240,6 +262,7 @@ async def build_source_registry(source_configs: list[SourceConfig]) -> SourceReg
                 access_mode=source_config.access_mode,
                 capabilities=capabilities,
                 enabled=source_config.enabled,
+                authority_role=source_config.authority_role,
                 status=health.status.value,
                 last_checked_at=health.last_checked_at,
                 last_error=health.last_error,
@@ -248,11 +271,33 @@ async def build_source_registry(source_configs: list[SourceConfig]) -> SourceReg
             )
         )
 
-    return SourceRegistry(entries, source_configs)
+    return SourceRegistry(
+        entries,
+        source_configs,
+        inventory_status=inventory_status,
+        loaded=True,
+    )
 
 
 def build_empty_source_registry() -> SourceRegistry:
-    return SourceRegistry([], [])
+    return SourceRegistry(
+        [],
+        [],
+        inventory_status=InventoryStatus.UNKNOWN,
+        loaded=False,
+    )
+
+
+def _validate_source_configs(source_configs: list[SourceConfig]) -> None:
+    if len(source_configs) > MAX_SOURCE_COUNT:
+        raise SourceConfigValidationError(
+            f"Configured source inventory exceeds {MAX_SOURCE_COUNT} sources."
+        )
+    source_ids = [source_config.source_id for source_config in source_configs]
+    if len(set(source_ids)) != len(source_ids):
+        raise SourceConfigValidationError(
+            "Configured source inventory contains duplicate source IDs."
+        )
 
 
 def _build_source_profile(source_config: SourceConfig) -> SourceProfile:

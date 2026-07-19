@@ -5,6 +5,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+MAX_SOURCE_COUNT = 32
+
 
 class AccessMode(str, Enum):
     READ_ONLY = "read_only"
@@ -50,6 +52,23 @@ class SourceStatus(str, Enum):
     DISABLED = "disabled"
 
 
+class SourceAuthorityRole(str, Enum):
+    AUTHORITATIVE = "authoritative"
+    SUPPLEMENTAL = "supplemental"
+    UNKNOWN = "unknown"
+
+
+class InventoryScope(str, Enum):
+    CONFIGURED_SOURCES = "configured_sources"
+
+
+class InventoryStatus(str, Enum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    UNKNOWN = "unknown"
+    UNAVAILABLE = "unavailable"
+
+
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "data-source-aggregator"
@@ -74,6 +93,7 @@ class SourceConfig(BaseModel):
     domain_tags: list[str] = Field(min_length=1)
     connector: str = Field(min_length=1)
     enabled: bool
+    authority_role: SourceAuthorityRole = SourceAuthorityRole.UNKNOWN
     sensitivity: Sensitivity
     access_mode: AccessMode
     connector_config: dict[str, object]
@@ -106,6 +126,7 @@ class SourceRegistryEntry(BaseModel):
     access_mode: AccessMode
     capabilities: list[str]
     enabled: bool
+    authority_role: SourceAuthorityRole
     status: str
     last_checked_at: datetime | None
     last_error: str | None = None
@@ -128,7 +149,11 @@ class SourceRegistryDetail(SourceRegistryEntry):
 
 
 class SourceListResponse(BaseModel):
-    sources: list[SourceRegistryEntry]
+    model_config = ConfigDict(extra="forbid")
+
+    inventory_scope: InventoryScope
+    inventory_status: InventoryStatus
+    sources: list[SourceRegistryEntry] = Field(max_length=MAX_SOURCE_COUNT)
 
 
 class SourceDetailResponse(BaseModel):

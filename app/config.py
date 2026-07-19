@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +13,15 @@ from pydantic import ValidationError
 from app.connectors.base import validate_connector_config
 from app.credentials import CredentialRegistry, load_credential_registry
 from app.errors import SourceConfigValidationError
-from app.models import SourceConfig
+from app.models import MAX_SOURCE_COUNT, InventoryStatus, SourceConfig
 
 DEFAULT_SOURCE_CONFIG_DIR = Path("config/sources")
+
+
+@dataclass(frozen=True)
+class SourceConfigLoadResult:
+    source_configs: list[SourceConfig]
+    inventory_status: InventoryStatus
 
 
 def get_dsa_api_key() -> str | None:
@@ -34,13 +41,28 @@ def get_source_config_dir() -> Path:
 
 
 def load_source_configs(config_dir: Path | None = None) -> list[SourceConfig]:
+    return load_source_config_inventory(config_dir).source_configs
+
+
+def load_source_config_inventory(
+    config_dir: Path | None = None,
+) -> SourceConfigLoadResult:
     _load_local_dotenv()
     directory = (config_dir or get_source_config_dir()).resolve()
     if not directory.exists():
-        return []
+        return SourceConfigLoadResult(
+            source_configs=[],
+            inventory_status=InventoryStatus.UNKNOWN,
+        )
+    if not directory.is_dir():
+        raise SourceConfigValidationError(
+            "Configured source path must be a directory."
+        )
 
     credential_registry = load_credential_registry()
     configs: list[SourceConfig] = []
+    source_ids: set[str] = set()
+    omitted_disabled_config = False
     for path in sorted(_iter_source_files(directory)):
         data = _load_yaml_file(path)
         try:
@@ -57,11 +79,28 @@ def load_source_configs(config_dir: Path | None = None) -> list[SourceConfig]:
                 f"Ignoring invalid disabled source config '{path.name}': {exc}",
                 stacklevel=2,
             )
+            omitted_disabled_config = True
             continue
 
+        if source_config.source_id in source_ids:
+            raise SourceConfigValidationError(
+                "Configured source inventory contains duplicate source IDs."
+            )
+        if len(configs) >= MAX_SOURCE_COUNT:
+            raise SourceConfigValidationError(
+                f"Configured source inventory exceeds {MAX_SOURCE_COUNT} sources."
+            )
+        source_ids.add(source_config.source_id)
         configs.append(source_config)
 
-    return configs
+    return SourceConfigLoadResult(
+        source_configs=configs,
+        inventory_status=(
+            InventoryStatus.PARTIAL
+            if omitted_disabled_config
+            else InventoryStatus.COMPLETE
+        ),
+    )
 
 
 def _iter_source_files(directory: Path) -> list[Path]:

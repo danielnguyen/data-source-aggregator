@@ -4,8 +4,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.models import SourceConfig, SourceHealth, SourceStatus
-from app.registry import build_source_registry
+from app.errors import SourceConfigValidationError
+from app.models import InventoryStatus, SourceConfig, SourceHealth, SourceStatus
+from app.registry import build_empty_source_registry, build_source_registry
 
 
 @pytest.mark.anyio
@@ -57,6 +58,7 @@ async def test_build_source_registry_exposes_safe_fields_only(
     assert dumped["display_name"] == "Vehicle Log - Primary"
     assert dumped["domain_tags"] == ["vehicle", "maintenance"]
     assert dumped["capabilities"] == ["profile", "search", "fetch", "context"]
+    assert dumped["authority_role"] == "unknown"
     assert dumped["status"] == "ready"
     assert dumped["last_error"] is None
     assert "connector_config" not in dumped
@@ -75,6 +77,7 @@ async def test_registry_detail_includes_safe_profile_and_retrieval(
             "domain_tags": ["calendar", "sports"],
             "connector": "ics_calendar",
             "enabled": True,
+            "authority_role": "authoritative",
             "sensitivity": "low",
             "access_mode": "read_only",
             "connector_config": {
@@ -111,6 +114,7 @@ async def test_registry_detail_includes_safe_profile_and_retrieval(
     assert detail.profile.summary == "ICS calendar source with read-only event retrieval."
     assert detail.retrieval.default_mode.value == "targeted"
     assert detail.status == "unavailable"
+    assert detail.authority_role.value == "authoritative"
     assert detail.last_error == "source_unavailable"
     assert "secret.ics" not in detail.model_dump_json()
     assert detail.display_name == "Sports Calendar"
@@ -135,6 +139,7 @@ async def test_disabled_source_returns_disabled_without_connector_check(
     entry = registry.list_sources()[0]
     assert entry.status == "disabled"
     assert entry.last_error is None
+    assert registry.inventory_status is InventoryStatus.COMPLETE
 
 
 @pytest.mark.anyio
@@ -230,3 +235,88 @@ async def test_rank_sources_for_query_falls_back_broadly_when_match_is_weak(
         "personal_calendar_agenda",
     }
     assert all(diagnostic.score == 0 for diagnostic in diagnostics)
+
+
+@pytest.mark.anyio
+async def test_registry_order_and_authority_are_configured_not_inferred(
+    source_config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authoritative = source_config_factory(
+        source_id="z_authoritative_records",
+        display_name="Canonical Authoritative Records",
+        description="Official complete source.",
+        domain_tags=["official", "authoritative"],
+        connector="ics_calendar",
+        connector_config={
+            "url": "https://private.example.test/authoritative.ics",
+            "timezone": "UTC",
+        },
+    )
+    supplemental = source_config_factory(
+        source_id="a_supplemental",
+        authority_role="supplemental",
+    )
+
+    class FakeConnector:
+        async def check_health(self, source_config: SourceConfig):
+            return SourceHealth(
+                status=SourceStatus.UNAVAILABLE,
+                last_checked_at=datetime(2026, 6, 10, tzinfo=UTC),
+                last_error="source_unavailable",
+            )
+
+    monkeypatch.setattr("app.registry.get_connector", lambda _: FakeConnector())
+
+    registry = await build_source_registry([authoritative, supplemental])
+
+    entries = registry.list_sources()
+    assert [entry.source_id for entry in entries] == [
+        "z_authoritative_records",
+        "a_supplemental",
+    ]
+    assert [entry.authority_role.value for entry in entries] == [
+        "unknown",
+        "supplemental",
+    ]
+    assert all(entry.status == "unavailable" for entry in entries)
+    assert registry.inventory_status is InventoryStatus.COMPLETE
+
+
+@pytest.mark.anyio
+async def test_registry_rejects_duplicate_and_oversized_source_sets(
+    source_config_factory,
+) -> None:
+    duplicate = source_config_factory(source_id="duplicate_source")
+    with pytest.raises(SourceConfigValidationError, match="duplicate source IDs"):
+        await build_source_registry([duplicate, duplicate])
+
+    oversized = [
+        source_config_factory(source_id=f"source_{index:02d}")
+        for index in range(33)
+    ]
+    with pytest.raises(SourceConfigValidationError, match="exceeds 32 sources"):
+        await build_source_registry(oversized)
+
+
+@pytest.mark.anyio
+async def test_registry_loaded_state_distinguishes_initial_and_loaded_empty() -> None:
+    initial = build_empty_source_registry()
+    loaded_complete = await build_source_registry([])
+    loaded_partial = await build_source_registry(
+        [],
+        inventory_status=InventoryStatus.PARTIAL,
+    )
+    loaded_unknown = await build_source_registry(
+        [],
+        inventory_status=InventoryStatus.UNKNOWN,
+    )
+
+    assert initial.loaded is False
+    assert initial.inventory_status is InventoryStatus.UNKNOWN
+    assert loaded_complete.loaded is True
+    assert loaded_complete.inventory_status is InventoryStatus.COMPLETE
+    assert loaded_partial.loaded is True
+    assert loaded_partial.inventory_status is InventoryStatus.PARTIAL
+    assert loaded_unknown.loaded is True
+    assert loaded_unknown.inventory_status is InventoryStatus.UNKNOWN

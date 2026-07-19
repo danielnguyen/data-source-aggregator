@@ -6,6 +6,7 @@ domain_tags:
   - sports
 connector: ics_calendar
 enabled: true
+authority_role: unknown
 
 sensitivity: low
 access_mode: read_only
