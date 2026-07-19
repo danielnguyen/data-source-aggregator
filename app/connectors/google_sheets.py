@@ -35,6 +35,12 @@ SOURCE_REF_PATTERN = re.compile(
     r"(?P<start_col>[A-Z]+)(?P<start_row>\d+)"
     r"(?::(?P<end_col>[A-Z]+)(?P<end_row>\d+))?$"
 )
+NEARBY_ROWS_CONTEXT_MODE = "nearby_rows"
+NEARBY_ROWS_CONTEXT_DESCRIPTION = "Fetch nearby rows."
+CONFIGURED_WORKSHEET_CONTEXT_MODE = "configured_worksheet"
+CONFIGURED_WORKSHEET_CONTEXT_DESCRIPTION = (
+    "Fetch every non-empty record from the configured worksheet."
+)
 
 
 class GoogleSheetsClient:
@@ -61,6 +67,7 @@ class SheetRow:
     row_number: int
     values_by_header: dict[str, str]
     range_name: str
+    end_col: str
 
 
 @dataclass(frozen=True)
@@ -210,7 +217,10 @@ class GoogleSheetsConnector:
         request: ContextRequest,
         source_config: SourceConfig,
     ) -> list[ResultEnvelope]:
-        if request.context_mode != "nearby_rows":
+        if request.context_mode not in {
+            NEARBY_ROWS_CONTEXT_MODE,
+            CONFIGURED_WORKSHEET_CONTEXT_MODE,
+        }:
             raise ServiceError(
                 "unsupported_operation",
                 f"Context mode '{request.context_mode}' is not supported for google_sheets.",
@@ -218,30 +228,58 @@ class GoogleSheetsConnector:
                 details={"context_mode": request.context_mode, "operation": "context"},
             )
 
-        parsed = parse_google_sheets_source_ref(request.source_ref)
+        parsed = self._validated_source_ref(request.source_ref, source_config)
+        if request.context_mode == CONFIGURED_WORKSHEET_CONTEXT_MODE:
+            if not source_config.retrieval.allow_full_fetch:
+                raise ServiceError(
+                    "unsupported_operation",
+                    (
+                        "Context mode 'configured_worksheet' is not enabled for "
+                        "the configured source."
+                    ),
+                    status_code=501,
+                    details={
+                        "context_mode": request.context_mode,
+                        "operation": "context",
+                    },
+                )
+            return self._configured_worksheet_context(
+                request,
+                source_config,
+                parsed,
+            )
+
+        return self._nearby_rows_context(request, source_config, parsed)
+
+    def _validated_source_ref(
+        self,
+        source_ref: str,
+        source_config: SourceConfig,
+    ) -> "ParsedGoogleSheetsSourceRef":
+        parsed = parse_google_sheets_source_ref(source_ref)
         if parsed.source_id != source_config.source_id:
             raise ServiceError(
                 "invalid_source_ref",
                 "The provided source_ref does not match the configured source.",
                 status_code=400,
-                details={"source_ref": request.source_ref},
+                details={"source_ref": source_ref},
             )
-        expected_worksheet = source_config.connector_config["worksheet"]
-        if parsed.worksheet != expected_worksheet:
+        if parsed.worksheet != self._worksheet_name(source_config):
             raise ServiceError(
                 "invalid_source_ref",
                 "The provided source_ref does not match the configured worksheet.",
                 status_code=400,
-                details={"source_ref": request.source_ref},
+                details={"source_ref": source_ref},
             )
+        return parsed
 
-        max_context_rows = int(source_config.retrieval.model_extra.get("max_context_rows", 20))
-        requested_rows = (
-            request.budget.max_rows
-            if request.budget and request.budget.max_rows
-            else None
-        )
-        row_limit = min(requested_rows, max_context_rows) if requested_rows else max_context_rows
+    def _nearby_rows_context(
+        self,
+        request: ContextRequest,
+        source_config: SourceConfig,
+        parsed: "ParsedGoogleSheetsSourceRef",
+    ) -> list[ResultEnvelope]:
+        row_limit = self._effective_context_row_limit(request, source_config)
 
         before_count = row_limit // 2
         after_count = row_limit - before_count - 1
@@ -264,6 +302,68 @@ class GoogleSheetsConnector:
             )
             for sheet_row in selected_rows
         ]
+
+    def _configured_worksheet_context(
+        self,
+        request: ContextRequest,
+        source_config: SourceConfig,
+        parsed: "ParsedGoogleSheetsSourceRef",
+    ) -> list[ResultEnvelope]:
+        sheet_rows = self._load_sheet_rows(source_config)
+        if not sheet_rows:
+            return []
+
+        row_limit = self._effective_context_row_limit(request, source_config)
+        if len(sheet_rows) > row_limit:
+            raise ServiceError(
+                "result_too_large",
+                "The configured worksheet exceeds the permitted context row limit.",
+                status_code=413,
+                details={"max_rows": row_limit},
+            )
+
+        first_row = sheet_rows[0]
+        last_row = sheet_rows[-1]
+        worksheet_locator = (
+            f"{quote_worksheet_name(parsed.worksheet)}!"
+            f"A{first_row.row_number}:{last_row.end_col}{last_row.row_number}"
+        )
+        complete_range = ParsedGoogleSheetsSourceRef(
+            source_id=source_config.source_id,
+            worksheet=parsed.worksheet,
+            start_col="A",
+            start_row=first_row.row_number,
+            end_col=last_row.end_col,
+            end_row=last_row.row_number,
+            original_locator=worksheet_locator,
+        )
+        return [
+            self._build_range_result(
+                source_config,
+                sheet_rows,
+                complete_range,
+                include_raw=False,
+            )
+        ]
+
+    def _effective_context_row_limit(
+        self,
+        request: ContextRequest,
+        source_config: SourceConfig,
+    ) -> int:
+        max_context_rows = int(
+            source_config.retrieval.model_extra.get("max_context_rows", 20)
+        )
+        requested_rows = (
+            request.budget.max_rows
+            if request.budget and request.budget.max_rows
+            else None
+        )
+        return (
+            min(requested_rows, max_context_rows)
+            if requested_rows
+            else max_context_rows
+        )
 
     def _load_sheet_rows(self, source_config: SourceConfig) -> list[SheetRow]:
         client = self._client_factory(source_config)
@@ -292,6 +392,7 @@ class GoogleSheetsConnector:
                     row_number=index,
                     values_by_header=values_by_header,
                     range_name=f"{quote_worksheet_name(worksheet)}!A{index}:{last_col}{index}",
+                    end_col=last_col,
                 )
             )
         return sheet_rows
@@ -311,7 +412,7 @@ class GoogleSheetsConnector:
             text = title
 
         context_items = (
-            [AvailableContext(context_mode="nearby_rows", description="Fetch nearby rows.")]
+            self._available_context(source_config)
             if available_context
             else []
         )
@@ -341,6 +442,25 @@ class GoogleSheetsConnector:
             available_context=context_items,
             record_date=_extract_sheet_row_date(sheet_row.values_by_header),
         )
+
+    def _available_context(
+        self,
+        source_config: SourceConfig,
+    ) -> list[AvailableContext]:
+        descriptors = [
+            AvailableContext(
+                context_mode=NEARBY_ROWS_CONTEXT_MODE,
+                description=NEARBY_ROWS_CONTEXT_DESCRIPTION,
+            )
+        ]
+        if source_config.retrieval.allow_full_fetch:
+            descriptors.append(
+                AvailableContext(
+                    context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+                    description=CONFIGURED_WORKSHEET_CONTEXT_DESCRIPTION,
+                )
+            )
+        return descriptors
 
     def _build_range_result(
         self,
