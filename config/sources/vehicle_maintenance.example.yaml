@@ -7,6 +7,11 @@ domain_tags:
 connector: google_sheets
 enabled: true
 authority_role: unknown
+scope_refs:
+  time: fy2026
+  version: maintenance-ledger-v1
+  domain: vehicle-maintenance
+  project: vehicle-log-example
 
 sensitivity: medium
 access_mode: read_only

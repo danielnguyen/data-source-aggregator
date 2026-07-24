@@ -20,10 +20,16 @@ def _write_ics_source(
     description: str = "Configured calendar source.",
     domain_tags: str = "[calendar]",
     connector: str = "ics_calendar",
+    scope_refs: str | None = None,
 ) -> None:
     authority_line = (
         f"authority_role: {authority_role}\n"
         if authority_role is not None
+        else ""
+    )
+    scope_refs_block = (
+        f"scope_refs:\n{scope_refs}\n"
+        if scope_refs is not None
         else ""
     )
     (source_dir / filename).write_text(
@@ -34,7 +40,7 @@ description: {description}
 domain_tags: {domain_tags}
 connector: {connector}
 enabled: {str(enabled).lower()}
-{authority_line}sensitivity: low
+{authority_line}{scope_refs_block}sensitivity: low
 access_mode: read_only
 connector_config:
   url: https://private.example.test/{source_id}.ics
@@ -48,6 +54,77 @@ retrieval:
 """,
         encoding="utf-8",
     )
+
+
+def test_scope_refs_load_exactly_through_source_inventory(tmp_path: Path) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_ics_source(
+        source_dir,
+        "calendar.yaml",
+        source_id="calendar_records",
+        scope_refs=(
+            "  time: fy2026\n"
+            "  version: release-152\n"
+            "  domain: scheduling\n"
+            "  project: calendar-service"
+        ),
+    )
+
+    result = load_source_config_inventory(source_dir)
+
+    assert result.inventory_status is InventoryStatus.COMPLETE
+    assert result.source_configs[0].scope_refs is not None
+    assert result.source_configs[0].scope_refs.model_dump(mode="json") == {
+        "time": "fy2026",
+        "version": "release-152",
+        "domain": "scheduling",
+        "project": "calendar-service",
+    }
+
+
+def test_malformed_enabled_scope_refs_fail_closed(tmp_path: Path) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_ics_source(
+        source_dir,
+        "invalid-enabled.yaml",
+        source_id="calendar_records",
+        scope_refs="  time: fy2026\n  project: unsafe project",
+    )
+
+    with pytest.raises(
+        SourceConfigValidationError,
+        match="Invalid enabled source config 'invalid-enabled.yaml'",
+    ):
+        load_source_config_inventory(source_dir)
+
+
+def test_malformed_disabled_scope_refs_are_omitted_as_partial(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_ics_source(
+        source_dir,
+        "valid.yaml",
+        source_id="valid_calendar",
+    )
+    _write_ics_source(
+        source_dir,
+        "invalid-disabled.yaml",
+        source_id="invalid_calendar",
+        enabled=False,
+        scope_refs="  time: null",
+    )
+
+    with pytest.warns(UserWarning, match="invalid-disabled.yaml"):
+        result = load_source_config_inventory(source_dir)
+
+    assert [config.source_id for config in result.source_configs] == [
+        "valid_calendar"
+    ]
+    assert result.inventory_status is InventoryStatus.PARTIAL
 
 
 def test_load_source_configs_resolves_env_vars(
