@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, datetime
 from enum import Enum
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 MAX_SOURCE_COUNT = 32
 
@@ -84,6 +93,50 @@ class RetrievalConfig(BaseModel):
     allow_full_fetch: bool
 
 
+MaterialScopeIdentifier = Annotated[
+    str,
+    Field(
+        strict=True,
+        min_length=1,
+        max_length=120,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    ),
+]
+
+
+class MaterialScopeReferences(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    time: MaterialScopeIdentifier | None = None
+    version: MaterialScopeIdentifier | None = None
+    domain: MaterialScopeIdentifier | None = None
+    project: MaterialScopeIdentifier | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_supplied_values(cls, value: object) -> object:
+        if isinstance(value, Mapping):
+            if not value:
+                raise ValueError("scope_refs must contain at least one value.")
+            if any(item is None for item in value.values()):
+                raise ValueError("scope_refs values must not be null.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_non_empty(self) -> "MaterialScopeReferences":
+        if not self.model_fields_set:
+            raise ValueError("scope_refs must contain at least one value.")
+        return self
+
+    @model_serializer(mode="wrap")
+    def omit_unsupplied_dimensions(self, handler):
+        return {
+            key: value
+            for key, value in handler(self).items()
+            if key in self.model_fields_set
+        }
+
+
 class SourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -99,6 +152,18 @@ class SourceConfig(BaseModel):
     connector_config: dict[str, object]
     retrieval: RetrievalConfig
     result_text: dict[str, object] | None = None
+    scope_refs: MaterialScopeReferences | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_scope_refs_object(cls, value: object) -> object:
+        if (
+            isinstance(value, Mapping)
+            and "scope_refs" in value
+            and value["scope_refs"] is None
+        ):
+            raise ValueError("scope_refs must not be null.")
+        return value
 
     @field_validator("source_id")
     @classmethod
@@ -130,6 +195,14 @@ class SourceRegistryEntry(BaseModel):
     status: str
     last_checked_at: datetime | None
     last_error: str | None = None
+    scope_refs: MaterialScopeReferences | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_absent_scope_refs(self, handler):
+        serialized = handler(self)
+        if self.scope_refs is None:
+            serialized.pop("scope_refs", None)
+        return serialized
 
 
 class SourceHealth(BaseModel):

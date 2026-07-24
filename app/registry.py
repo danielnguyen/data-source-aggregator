@@ -266,6 +266,7 @@ async def build_source_registry(
                 status=health.status.value,
                 last_checked_at=health.last_checked_at,
                 last_error=health.last_error,
+                scope_refs=source_config.scope_refs,
                 retrieval=source_config.retrieval,
                 profile=_build_source_profile(source_config),
             )

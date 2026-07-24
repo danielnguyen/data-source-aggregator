@@ -6,8 +6,84 @@ import pytest
 from pydantic import ValidationError
 
 from app.errors import ServiceError
-from app.models import AvailableContext, ContextPackItem, ResultEnvelope, RetrievalBudget
+from app.models import (
+    AvailableContext,
+    ContextPackItem,
+    MaterialScopeReferences,
+    ResultEnvelope,
+    RetrievalBudget,
+    SourceConfig,
+)
 from app.services.budget import build_effective_budget, enforce_budget
+
+
+@pytest.mark.parametrize(
+    "scope_refs",
+    [
+        {"time": "fy2026"},
+        {"version": "release-152"},
+        {"domain": "credential-management"},
+        {"project": "firefox"},
+        {"time": "fy2026", "project": "firefox"},
+        {
+            "time": "fy2026",
+            "version": "release-152",
+            "domain": "credential-management",
+            "project": "firefox",
+        },
+    ],
+)
+def test_material_scope_references_accept_exact_configured_subsets(
+    scope_refs: dict[str, str],
+) -> None:
+    references = MaterialScopeReferences.model_validate(scope_refs)
+
+    assert references.model_dump(mode="json") == scope_refs
+
+
+@pytest.mark.parametrize(
+    "scope_refs",
+    [
+        None,
+        [],
+        "fy2026",
+        2026,
+        {},
+        {"time": None},
+        {"time": 2026},
+        {"time": ""},
+        {"time": " "},
+        {"time": " fy2026"},
+        {"time": "fy2026 "},
+        {"time": "https://scope.example.test/fy2026"},
+        {"time": "fy2026?region=west"},
+        {"time": "fy2026/west"},
+        {"time": "fy2026!"},
+        {"time": "x" * 121},
+        {"owner": "operations"},
+        {"time": "fy2026", "project": "unsafe project"},
+    ],
+)
+def test_material_scope_references_reject_malformed_objects(
+    scope_refs: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        MaterialScopeReferences.model_validate(scope_refs)
+
+
+def test_source_config_accepts_legacy_absence_and_rejects_explicit_null_scope_refs(
+    source_config_factory,
+) -> None:
+    legacy = source_config_factory()
+
+    assert legacy.scope_refs is None
+    with pytest.raises(ValidationError):
+        SourceConfig.model_validate(
+            {
+                **legacy.model_dump(mode="json", exclude={"scope_refs"}),
+                "scope_refs": None,
+            }
+        )
 
 
 def test_retrieval_budget_requires_at_least_one_field() -> None:

@@ -60,7 +60,9 @@ async def test_build_source_registry_exposes_safe_fields_only(
     assert dumped["capabilities"] == ["profile", "search", "fetch", "context"]
     assert dumped["authority_role"] == "unknown"
     assert dumped["status"] == "ready"
+    assert dumped["last_checked_at"] == "2026-06-10T00:00:00Z"
     assert dumped["last_error"] is None
+    assert "scope_refs" not in dumped
     assert "connector_config" not in dumped
     assert "sheet-secret-id" not in str(dumped)
 
@@ -119,6 +121,108 @@ async def test_registry_detail_includes_safe_profile_and_retrieval(
     assert "secret.ics" not in detail.model_dump_json()
     assert detail.display_name == "Sports Calendar"
     assert detail.domain_tags == ["calendar", "sports"]
+
+
+@pytest.mark.anyio
+async def test_registry_copies_configured_scope_refs_for_list_and_detail(
+    source_config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = source_config_factory(
+        source_id="z_scoped_source",
+        scope_refs={
+            "time": "fy2026",
+            "version": "release-152",
+            "domain": "credential-management",
+            "project": "firefox",
+        },
+        connector_config={
+            "spreadsheet_id": "private-sheet-id",
+            "worksheet": "Maintenance",
+            "header_row": 1,
+        },
+    )
+    second = source_config_factory(
+        source_id="a_partial_scope",
+        scope_refs={"domain": "calendar", "project": "agenda"},
+    )
+
+    class FakeConnector:
+        async def check_health(self, source_config: SourceConfig):
+            return SourceHealth(
+                status=SourceStatus.READY,
+                last_checked_at=datetime(2026, 6, 10, tzinfo=UTC),
+                last_error=None,
+            )
+
+    monkeypatch.setattr("app.registry.get_connector", lambda _: FakeConnector())
+
+    registry = await build_source_registry([first, second])
+    listed = registry.list_sources()
+    detail = registry.get_source("z_scoped_source")
+
+    assert [entry.source_id for entry in listed] == [
+        "z_scoped_source",
+        "a_partial_scope",
+    ]
+    assert listed[0].model_dump(mode="json")["scope_refs"] == {
+        "time": "fy2026",
+        "version": "release-152",
+        "domain": "credential-management",
+        "project": "firefox",
+    }
+    assert listed[1].model_dump(mode="json")["scope_refs"] == {
+        "domain": "calendar",
+        "project": "agenda",
+    }
+    assert detail is not None
+    assert detail.model_dump(mode="json")["scope_refs"] == {
+        "time": "fy2026",
+        "version": "release-152",
+        "domain": "credential-management",
+        "project": "firefox",
+    }
+    assert "connector_config" not in detail.model_dump(mode="json")
+    assert "private-sheet-id" not in detail.model_dump_json()
+
+
+@pytest.mark.anyio
+async def test_registry_does_not_manufacture_scope_from_other_source_fields(
+    source_config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = source_config_factory(
+        source_id="fy2026_firefox",
+        display_name="Release 152 Firefox",
+        description="Credential management project for FY2026.",
+        domain_tags=["credential-management", "firefox"],
+        connector_config={
+            "spreadsheet_id": "release-152",
+            "worksheet": "fy2026",
+            "header_row": 1,
+        },
+        result_text={"title_from": "firefox", "include_fields": ["fy2026"]},
+        authority_role="authoritative",
+    )
+
+    class FakeConnector:
+        async def check_health(self, source_config: SourceConfig):
+            return SourceHealth(
+                status=SourceStatus.READY,
+                last_checked_at=datetime(2026, 6, 10, tzinfo=UTC),
+                last_error=None,
+            )
+
+    monkeypatch.setattr("app.registry.get_connector", lambda _: FakeConnector())
+
+    registry = await build_source_registry([source])
+    listed = registry.list_sources()[0].model_dump(mode="json")
+    detail = registry.get_source("fy2026_firefox")
+
+    assert source.scope_refs is None
+    assert "scope_refs" not in listed
+    assert detail is not None
+    assert "scope_refs" not in detail.model_dump(mode="json")
 
 
 @pytest.mark.anyio

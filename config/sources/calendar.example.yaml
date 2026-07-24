@@ -7,6 +7,9 @@ domain_tags:
 connector: ics_calendar
 enabled: true
 authority_role: unknown
+scope_refs:
+  domain: sports-scheduling
+  project: calendar-example
 
 sensitivity: low
 access_mode: read_only

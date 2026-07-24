@@ -97,21 +97,21 @@ async def test_sources_routes_return_safe_registry_entries(
             request: SearchRequest,
             source_config,
         ) -> list[ResultEnvelope]:
-            return []
+            raise AssertionError("source listing must not execute search")
 
         async def fetch(
             self,
             request: FetchRequest,
             source_config,
         ) -> list[ResultEnvelope]:
-            return []
+            raise AssertionError("source listing must not execute fetch")
 
         async def context(
             self,
             request: ContextRequest,
             source_config,
         ) -> list[ResultEnvelope]:
-            return []
+            raise AssertionError("source listing must not execute context")
 
         async def check_health(self, source_config):
             return SourceHealth(
@@ -137,6 +137,11 @@ domain_tags: [vehicle, maintenance]
 connector: google_sheets
 enabled: true
 authority_role: authoritative
+scope_refs:
+  time: fy2026
+  version: release-152
+  domain: vehicle-maintenance
+  project: vehicle-log
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -173,6 +178,12 @@ retrieval:
     assert payload["sources"][0]["last_error"] is None
     assert payload["sources"][0]["capabilities"] == ["profile", "search", "fetch", "context"]
     assert payload["sources"][0]["authority_role"] == "authoritative"
+    assert payload["sources"][0]["scope_refs"] == {
+        "time": "fy2026",
+        "version": "release-152",
+        "domain": "vehicle-maintenance",
+        "project": "vehicle-log",
+    }
     assert "connector_config" not in payload["sources"][0]
     assert "sheet-secret-id" not in str(payload)
 
@@ -182,6 +193,12 @@ retrieval:
     assert detail_payload["source"]["display_name"] == "Vehicle Log - Primary"
     assert detail_payload["source"]["domain_tags"] == ["vehicle", "maintenance"]
     assert detail_payload["source"]["authority_role"] == "authoritative"
+    assert detail_payload["source"]["scope_refs"] == {
+        "time": "fy2026",
+        "version": "release-152",
+        "domain": "vehicle-maintenance",
+        "project": "vehicle-log",
+    }
     assert detail_payload["source"]["status"] == "ready"
     assert detail_payload["source"]["last_checked_at"] == "2026-06-10T00:00:00Z"
     assert detail_payload["source"]["last_error"] is None
@@ -241,6 +258,7 @@ retrieval:
     transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/v1/sources")
+        detail_response = await client.get("/v1/sources/calendar_sports")
 
     assert response.status_code == 200
     payload = response.json()
@@ -249,7 +267,13 @@ retrieval:
     assert payload["sources"][0]["authority_role"] == "supplemental"
     assert payload["sources"][0]["status"] == "unavailable"
     assert payload["sources"][0]["last_error"] == "source_unavailable"
+    assert "scope_refs" not in payload["sources"][0]
     assert "private.example.test" not in str(payload)
+    assert detail_response.status_code == 200
+    detail = detail_response.json()["source"]
+    assert detail["last_checked_at"] == "2026-06-10T00:00:00Z"
+    assert detail["last_error"] == "source_unavailable"
+    assert "scope_refs" not in detail
 
 
 @pytest.mark.anyio

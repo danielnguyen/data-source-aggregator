@@ -54,6 +54,24 @@ Allowed values are `authoritative`, `supplemental`, and `unknown`. The field is
 operator-configured and is never inferred from source names, tags, connectors,
 health, or retrieval results. Omitted values default to `unknown`.
 
+Each source may also declare optional operator-configured material scope
+references:
+
+```yaml
+scope_refs:
+  time: fy2026
+  version: release-152
+  domain: credential-management
+  project: firefox
+```
+
+Any non-empty subset of `time`, `version`, `domain`, and `project` is valid.
+Values are case-preserving identifiers from 1 through 120 characters matching
+`^[A-Za-z0-9][A-Za-z0-9._:-]*$`. They are copied only from validated source
+configuration and are never inferred from source names, tags, descriptions,
+connectors, content, health, user text, or provider output. Legacy source
+configurations without `scope_refs` remain valid.
+
 ## Local files (gitignored)
 
 - `config/sources/*.yaml`
@@ -171,6 +189,12 @@ disabled config that is deliberately omitted produces `partial`; a missing
 source-config directory produces `unknown`. Source and credential configuration,
 paths, environment references, URLs, secrets, and raw YAML are not exposed by
 the source inventory API.
+
+The list and detail inventory responses expose an exact configured `scope_refs`
+object when present and omit the key when it is absent. This metadata does not
+change retrieval, source selection, authority, health, audit, credentials, or
+connector behavior. Connector configuration, URLs, secrets, and raw source
+content remain excluded from the inventory projection.
 
 If `DSA_API_KEY` is set, include the header:
 
