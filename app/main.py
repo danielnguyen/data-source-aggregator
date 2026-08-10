@@ -34,7 +34,7 @@ from app.services.fetch import run_context, run_fetch
 from app.services.search import run_search
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
-_request_logger = logging.getLogger("data_source_aggregator.requests")
+_request_logger = logging.getLogger("uvicorn.error.data_source_aggregator.requests")
 
 
 def create_app(source_config_dir: Path | None = None) -> FastAPI:

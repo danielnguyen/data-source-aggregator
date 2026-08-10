@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -18,7 +20,7 @@ from app.models import (
     SourceStatus,
 )
 
-REQUEST_LOGGER = "data_source_aggregator.requests"
+REQUEST_LOGGER = "uvicorn.error.data_source_aggregator.requests"
 
 
 def _write_credentials_config(tmp_path: Path, monkeypatch) -> None:
@@ -87,6 +89,36 @@ async def test_health_route(tmp_path: Path) -> None:
         "status": "ok",
         "service": "data-source-aggregator",
     }
+
+
+def test_request_logger_emits_info_with_default_uvicorn_logging() -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    program = """
+import copy
+import logging.config
+
+from uvicorn.config import LOGGING_CONFIG
+
+import app.main as main_module
+
+assert main_module._request_logger.name == (
+    "uvicorn.error.data_source_aggregator.requests"
+)
+logging.config.dictConfig(copy.deepcopy(LOGGING_CONFIG))
+main_module._request_logger.info("DSA_CORRELATION_VISIBILITY_SENTINEL")
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=repository_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "DSA_CORRELATION_VISIBILITY_SENTINEL" in (
+        completed.stdout + completed.stderr
+    )
 
 
 @pytest.mark.anyio
