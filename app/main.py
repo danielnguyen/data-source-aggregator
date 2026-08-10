@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hmac
+import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -31,6 +33,9 @@ from app.services.context_pack import run_context_pack
 from app.services.fetch import run_context, run_fetch
 from app.services.search import run_search
 
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
+_request_logger = logging.getLogger("uvicorn.error.data_source_aggregator.requests")
+
 
 def create_app(source_config_dir: Path | None = None) -> FastAPI:
     @asynccontextmanager
@@ -43,6 +48,32 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
     app.state.audit_log_writer = AuditLogWriter()
     app.state.source_config_dir = source_config_dir
     app.state.dsa_api_key = get_dsa_api_key()
+
+    @app.middleware("http")
+    async def correlate_request(request: Request, call_next):
+        request_id, correlation_state = _request_correlation(
+            request.headers.get("X-Request-ID")
+        )
+        try:
+            response = await call_next(request)
+        except Exception:
+            _log_request_completion(
+                request=request,
+                request_id=request_id,
+                correlation_state=correlation_state,
+                status_code=500,
+            )
+            raise
+
+        if request_id is not None:
+            response.headers["X-Request-ID"] = request_id
+        _log_request_completion(
+            request=request,
+            request_id=request_id,
+            correlation_state=correlation_state,
+            status_code=response.status_code,
+        )
+        return response
 
     @app.exception_handler(ServiceError)
     async def handle_service_error(_: Request, error: ServiceError) -> JSONResponse:
@@ -151,6 +182,46 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
         )
 
     return app
+
+
+def _request_correlation(raw_request_id: str | None) -> tuple[str | None, str]:
+    if raw_request_id is None:
+        return None, "absent"
+    if _REQUEST_ID_PATTERN.fullmatch(raw_request_id):
+        return raw_request_id, "valid"
+    return None, "invalid"
+
+
+def _log_request_completion(
+    *,
+    request: Request,
+    request_id: str | None,
+    correlation_state: str,
+    status_code: int,
+) -> None:
+    route = request.scope.get("route")
+    route_template = getattr(route, "path", None)
+    if not isinstance(route_template, str) or not route_template.startswith("/"):
+        route_template = "unmatched"
+    method = request.method if re.fullmatch(r"[A-Z]{1,16}", request.method) else "UNKNOWN"
+    if request_id is None:
+        _request_logger.info(
+            "dsa_request_completed component=data-source-aggregator "
+            "correlation_state=%s method=%s route=%s status=%d",
+            correlation_state,
+            method,
+            route_template,
+            status_code,
+        )
+        return
+    _request_logger.info(
+        "dsa_request_completed component=data-source-aggregator "
+        "correlation_state=valid request_id=%s method=%s route=%s status=%d",
+        request_id,
+        method,
+        route_template,
+        status_code,
+    )
 
 
 def _get_registry(request: Request) -> SourceRegistry:

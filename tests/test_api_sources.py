@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -16,6 +19,8 @@ from app.models import (
     SourceHealth,
     SourceStatus,
 )
+
+REQUEST_LOGGER = "uvicorn.error.data_source_aggregator.requests"
 
 
 def _write_credentials_config(tmp_path: Path, monkeypatch) -> None:
@@ -84,6 +89,125 @@ async def test_health_route(tmp_path: Path) -> None:
         "status": "ok",
         "service": "data-source-aggregator",
     }
+
+
+def test_request_logger_emits_info_with_default_uvicorn_logging() -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    program = """
+import copy
+import logging.config
+
+from uvicorn.config import LOGGING_CONFIG
+
+import app.main as main_module
+
+assert main_module._request_logger.name == (
+    "uvicorn.error.data_source_aggregator.requests"
+)
+logging.config.dictConfig(copy.deepcopy(LOGGING_CONFIG))
+main_module._request_logger.info("DSA_CORRELATION_VISIBILITY_SENTINEL")
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=repository_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "DSA_CORRELATION_VISIBILITY_SENTINEL" in (
+        completed.stdout + completed.stderr
+    )
+
+
+@pytest.mark.anyio
+async def test_valid_request_id_is_echoed_and_logged(tmp_path: Path, caplog) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    request_id = "chat.request_123:attempt-1"
+    caplog.set_level(logging.INFO, logger=REQUEST_LOGGER)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/sources",
+            headers={"X-Request-ID": request_id},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == request_id
+    assert request_id in caplog.text
+    assert "correlation_state=valid" in caplog.text
+    assert "method=GET" in caplog.text
+    assert "route=/v1/sources" in caplog.text
+    assert "status=200" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_missing_request_id_is_not_fabricated(tmp_path: Path, caplog) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    caplog.set_level(logging.INFO, logger=REQUEST_LOGGER)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/sources")
+
+    assert response.status_code == 200
+    assert "X-Request-ID" not in response.headers
+    assert "correlation_state=absent" in caplog.text
+    assert "request_id=" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_invalid_request_id_is_not_echoed_or_logged(tmp_path: Path, caplog) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    malformed = "invalid request id PRIVATE_HEADER_SENTINEL"
+    caplog.set_level(logging.INFO, logger=REQUEST_LOGGER)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/sources?query=PRIVATE_QUERY_SENTINEL",
+            headers={"X-Request-ID": malformed},
+        )
+
+    assert response.status_code == 200
+    assert "X-Request-ID" not in response.headers
+    assert "correlation_state=invalid" in caplog.text
+    assert malformed not in caplog.text
+    assert "PRIVATE_HEADER_SENTINEL" not in caplog.text
+    assert "PRIVATE_QUERY_SENTINEL" not in caplog.text
+    assert "route=/v1/sources" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_valid_request_id_survives_validation_error_without_logging_body(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    request_id = "validation-request-1"
+    caplog.set_level(logging.INFO, logger=REQUEST_LOGGER)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/context-pack?query=PRIVATE_QUERY_SENTINEL",
+            headers={"X-Request-ID": request_id},
+            json={"query": {"private": "PRIVATE_BODY_SENTINEL"}},
+        )
+
+    assert response.status_code == 422
+    assert response.headers["X-Request-ID"] == request_id
+    assert request_id in caplog.text
+    assert "route=/v1/context-pack" in caplog.text
+    assert "status=422" in caplog.text
+    assert "PRIVATE_QUERY_SENTINEL" not in caplog.text
+    assert "PRIVATE_BODY_SENTINEL" not in caplog.text
 
 
 @pytest.mark.anyio
