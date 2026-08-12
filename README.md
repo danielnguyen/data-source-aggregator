@@ -182,13 +182,23 @@ The response reports the bounded configured-source inventory:
 ```
 
 `complete` means every non-example source config in the resolved source-config
-directory was represented. It does not mean every potentially relevant
-real-world source was configured. Valid disabled and currently unavailable
-sources remain represented and do not reduce inventory completeness. An invalid
-disabled config that is deliberately omitted produces `partial`; a missing
-source-config directory produces `unknown`. Source and credential configuration,
-paths, environment references, URLs, secrets, and raw YAML are not exposed by
-the source inventory API.
+directory has a public entry that satisfies the supported bounded inventory
+projection. It does not mean every potentially relevant real-world source was
+configured. DSA keeps its configured internal source registry separate from
+this public projection. A configured source whose public metadata does not
+satisfy the projection is omitted from `/v1/sources` without poisoning valid
+neighbors or being disabled or removed from the internal registry. Such an
+omission makes an otherwise complete public inventory `partial`, and rejected
+configured values are not silently normalized. Quarantine diagnostics use
+closed field and reason codes without exposing rejected raw values.
+
+Valid disabled and currently unavailable sources remain represented and do not
+reduce inventory completeness. An invalid disabled config that is deliberately
+omitted during configuration loading also produces `partial`; a missing
+source-config directory produces `unknown`. These states remain distinct from
+public projection quarantine. Source and credential configuration, paths,
+environment references, URLs, secrets, and raw YAML are not exposed by the
+source inventory API.
 
 The list and detail inventory responses expose an exact configured `scope_refs`
 object when present and omit the key when it is absent. This metadata does not
