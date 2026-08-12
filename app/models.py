@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import date, datetime
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -13,6 +13,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 MAX_SOURCE_COUNT = 32
 
@@ -97,6 +98,15 @@ MaterialScopeIdentifier = Annotated[
     str,
     Field(
         strict=True,
+        min_length=1,
+        max_length=120,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    ),
+]
+
+PublicSourceIdentifier = Annotated[
+    str,
+    Field(
         min_length=1,
         max_length=120,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
@@ -205,6 +215,49 @@ class SourceRegistryEntry(BaseModel):
         return serialized
 
 
+class PublicSourceRegistryEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: PublicSourceIdentifier
+    display_name: str = Field(min_length=1, max_length=240)
+    connector: PublicSourceIdentifier
+    domain_tags: list[PublicSourceIdentifier] = Field(max_length=8)
+    sensitivity: Sensitivity
+    access_mode: AccessMode
+    capabilities: list[Literal["profile", "search", "fetch", "context"]] = Field(
+        max_length=4
+    )
+    enabled: bool
+    authority_role: SourceAuthorityRole
+    status: Literal["ready", "unavailable", "disabled", "unknown"]
+    last_checked_at: datetime | None
+    last_error: str | None = Field(default=None, max_length=240)
+    scope_refs: MaterialScopeReferences | None = None
+
+    @field_validator("domain_tags", "capabilities")
+    @classmethod
+    def validate_unique_items(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise PydanticCustomError("duplicate_items", "Collection items must be unique.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_scope_refs_presence(self) -> "PublicSourceRegistryEntry":
+        if "scope_refs" in self.model_fields_set and self.scope_refs is None:
+            raise PydanticCustomError(
+                "invalid_value",
+                "scope_refs must not be null when supplied.",
+            )
+        return self
+
+    @model_serializer(mode="wrap")
+    def omit_absent_scope_refs(self, handler):
+        serialized = handler(self)
+        if self.scope_refs is None:
+            serialized.pop("scope_refs", None)
+        return serialized
+
+
 class SourceHealth(BaseModel):
     status: SourceStatus
     last_checked_at: datetime
@@ -226,7 +279,7 @@ class SourceListResponse(BaseModel):
 
     inventory_scope: InventoryScope
     inventory_status: InventoryStatus
-    sources: list[SourceRegistryEntry] = Field(max_length=MAX_SOURCE_COUNT)
+    sources: list[PublicSourceRegistryEntry] = Field(max_length=MAX_SOURCE_COUNT)
 
 
 class SourceDetailResponse(BaseModel):

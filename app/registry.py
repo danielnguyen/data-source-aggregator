@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+
+from pydantic import TypeAdapter, ValidationError
 
 from app.connectors.base import capabilities_for_connector, get_connector
 from app.errors import SourceConfigValidationError
@@ -9,15 +12,43 @@ from app.models import (
     MAX_SOURCE_COUNT,
     ContextPackSourceDiagnostic,
     InventoryStatus,
+    PublicSourceIdentifier,
+    PublicSourceRegistryEntry,
     Sensitivity,
     SourceConfig,
     SourceHealth,
     SourceProfile,
     SourceRegistryDetail,
-    SourceRegistryEntry,
     SourceStatus,
 )
 from app.services.relevance import build_query_relevance_profile, overlap_score, tokenize_text
+
+_registry_logger = logging.getLogger("uvicorn.error.data_source_aggregator.registry")
+_public_identifier_adapter = TypeAdapter(PublicSourceIdentifier)
+_PUBLIC_ENTRY_FIELDS = frozenset(
+    {
+        "source_id",
+        "display_name",
+        "connector",
+        "domain_tags",
+        "sensitivity",
+        "access_mode",
+        "capabilities",
+        "enabled",
+        "status",
+        "last_checked_at",
+        "last_error",
+        "authority_role",
+        "scope_refs",
+    }
+)
+_PUBLIC_VALIDATION_REASONS = {
+    "string_pattern_mismatch": "invalid_identifier",
+    "string_too_long": "value_too_long",
+    "too_long": "collection_too_large",
+    "duplicate_items": "duplicate_items",
+    "literal_error": "unsupported_value",
+}
 
 
 @dataclass(frozen=True)
@@ -46,7 +77,19 @@ class SourceRegistry:
             source_config.source_id: source_config
             for source_config in source_configs
         }
-        self._inventory_status = inventory_status
+        self._public_entries: list[PublicSourceRegistryEntry] = []
+        quarantined_count = 0
+        for entry in entries:
+            public_entry = _project_public_entry(entry)
+            if public_entry is None:
+                quarantined_count += 1
+                continue
+            self._public_entries.append(public_entry)
+        self._base_inventory_status = inventory_status
+        self._inventory_status = _effective_public_inventory_status(
+            inventory_status,
+            quarantined=quarantined_count > 0,
+        )
         self._loaded = loaded
 
     @property
@@ -57,11 +100,8 @@ class SourceRegistry:
     def loaded(self) -> bool:
         return self._loaded
 
-    def list_sources(self) -> list[SourceRegistryEntry]:
-        return [
-            SourceRegistryEntry.model_validate(entry.model_dump())
-            for entry in self._entries.values()
-        ]
+    def list_sources(self) -> list[PublicSourceRegistryEntry]:
+        return list(self._public_entries)
 
     def get_source(self, source_id: str) -> SourceRegistryDetail | None:
         return self._entries.get(source_id)
@@ -287,6 +327,68 @@ def build_empty_source_registry() -> SourceRegistry:
         inventory_status=InventoryStatus.UNKNOWN,
         loaded=False,
     )
+
+
+def _project_public_entry(
+    entry: SourceRegistryDetail,
+) -> PublicSourceRegistryEntry | None:
+    projection = entry.model_dump()
+    if projection.get("scope_refs") is None:
+        projection.pop("scope_refs", None)
+    projection.pop("retrieval", None)
+    projection.pop("profile", None)
+    try:
+        return PublicSourceRegistryEntry.model_validate(projection)
+    except ValidationError as error:
+        field, reason = _public_validation_diagnostic(error)
+        if _is_public_identifier(entry.source_id):
+            _registry_logger.warning(
+                "public_source_projection_quarantined "
+                "component=data-source-aggregator field=%s reason=%s source_id=%s",
+                field,
+                reason,
+                entry.source_id,
+            )
+        else:
+            _registry_logger.warning(
+                "public_source_projection_quarantined "
+                "component=data-source-aggregator field=%s reason=%s "
+                "source_id_state=omitted",
+                field,
+                reason,
+            )
+        return None
+
+
+def _public_validation_diagnostic(error: ValidationError) -> tuple[str, str]:
+    issues = error.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    )
+    issue = issues[0] if issues else {}
+    location = issue.get("loc", ())
+    field = location[0] if location and location[0] in _PUBLIC_ENTRY_FIELDS else "entry"
+    reason = _PUBLIC_VALIDATION_REASONS.get(issue.get("type"), "invalid_value")
+    return str(field), reason
+
+
+def _is_public_identifier(value: str) -> bool:
+    try:
+        _public_identifier_adapter.validate_python(value)
+    except ValidationError:
+        return False
+    return True
+
+
+def _effective_public_inventory_status(
+    base_status: InventoryStatus,
+    *,
+    quarantined: bool,
+) -> InventoryStatus:
+    if quarantined and base_status == InventoryStatus.COMPLETE:
+        return InventoryStatus.PARTIAL
+    return base_status
 
 
 def _validate_source_configs(source_configs: list[SourceConfig]) -> None:

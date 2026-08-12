@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -14,13 +16,21 @@ from app.main import create_app
 from app.models import (
     ContextRequest,
     FetchRequest,
+    InventoryStatus,
     ResultEnvelope,
+    RetrievalConfig,
     SearchRequest,
+    Sensitivity,
+    SourceConfig,
     SourceHealth,
+    SourceProfile,
+    SourceRegistryDetail,
     SourceStatus,
 )
+from app.registry import SourceRegistry
 
 REQUEST_LOGGER = "uvicorn.error.data_source_aggregator.requests"
+REGISTRY_LOGGER = "uvicorn.error.data_source_aggregator.registry"
 
 
 def _write_credentials_config(tmp_path: Path, monkeypatch) -> None:
@@ -45,6 +55,8 @@ def _write_ics_source(
     enabled: bool = True,
     authority_role: str | None = None,
     description: str = "Configured calendar source.",
+    display_name: str = "Configured Calendar",
+    domain_tags: list[str] | None = None,
 ) -> None:
     authority_line = (
         f"authority_role: {authority_role}\n"
@@ -54,9 +66,9 @@ def _write_ics_source(
     (source_dir / filename).write_text(
         f"""
 source_id: {source_id}
-display_name: Configured Calendar
+display_name: {json.dumps(display_name)}
 description: {description}
-domain_tags: [calendar]
+domain_tags: {json.dumps(domain_tags or ["calendar"])}
 connector: ics_calendar
 enabled: {str(enabled).lower()}
 {authority_line}sensitivity: low
@@ -72,6 +84,86 @@ retrieval:
   allow_full_fetch: false
 """,
         encoding="utf-8",
+    )
+
+
+def _source_config(
+    *,
+    source_id: str = "configured_calendar",
+    display_name: str = "Configured Calendar",
+    domain_tags: list[str] | None = None,
+    description: str = "Configured calendar source.",
+    enabled: bool = False,
+) -> SourceConfig:
+    return SourceConfig(
+        source_id=source_id,
+        display_name=display_name,
+        description=description,
+        domain_tags=domain_tags or ["calendar"],
+        connector="ics_calendar",
+        enabled=enabled,
+        sensitivity="low",
+        access_mode="read_only",
+        connector_config={
+            "url": "https://private.example.test/calendar.ics",
+            "timezone": "UTC",
+            "credential": "PRIVATE_CONFIG_SENTINEL",
+        },
+        retrieval=RetrievalConfig(
+            default_mode="targeted",
+            max_results=10,
+            max_bytes=100000,
+            max_text_chars=40000,
+            allow_full_fetch=False,
+        ),
+    )
+
+
+def _registry_detail(
+    source_config: SourceConfig,
+    *,
+    last_error: str | None = None,
+) -> SourceRegistryDetail:
+    return SourceRegistryDetail(
+        source_id=source_config.source_id,
+        display_name=source_config.display_name,
+        connector=source_config.connector,
+        domain_tags=source_config.domain_tags,
+        sensitivity=source_config.sensitivity,
+        access_mode=source_config.access_mode,
+        capabilities=["profile", "search", "fetch", "context"],
+        enabled=source_config.enabled,
+        authority_role=source_config.authority_role,
+        status="ready" if source_config.enabled else "disabled",
+        last_checked_at=datetime(2026, 8, 12, tzinfo=UTC),
+        last_error=last_error,
+        scope_refs=source_config.scope_refs,
+        retrieval=source_config.retrieval,
+        profile=SourceProfile(
+            summary="Configured source.",
+            content_types=["source_record"],
+        ),
+    )
+
+
+def _source_registry(
+    source_configs: list[SourceConfig],
+    *,
+    inventory_status: InventoryStatus = InventoryStatus.COMPLETE,
+    last_errors: dict[str, str] | None = None,
+) -> SourceRegistry:
+    errors = last_errors or {}
+    return SourceRegistry(
+        [
+            _registry_detail(
+                source_config,
+                last_error=errors.get(source_config.source_id),
+            )
+            for source_config in source_configs
+        ],
+        source_configs,
+        inventory_status=inventory_status,
+        loaded=True,
     )
 
 
@@ -706,3 +798,312 @@ async def test_valid_disabled_source_is_represented_in_complete_inventory(
     assert response.json()["sources"][0]["source_id"] == "disabled_calendar"
     assert response.json()["sources"][0]["status"] == "disabled"
     assert response.json()["sources"][0]["authority_role"] == "unknown"
+
+
+def test_all_valid_public_inventory_preserves_values_order_and_complete_status() -> None:
+    first = _source_config(
+        source_id="calendar_alpha",
+        display_name="Calendar Alpha",
+        domain_tags=["calendar", "alpha"],
+    )
+    second = _source_config(
+        source_id="calendar_beta",
+        display_name="Calendar Beta",
+        domain_tags=["calendar", "beta"],
+    )
+
+    registry = _source_registry([first, second])
+
+    public_entries = registry.list_sources()
+    assert registry.inventory_status == InventoryStatus.COMPLETE
+    assert [entry.source_id for entry in public_entries] == [
+        "calendar_alpha",
+        "calendar_beta",
+    ]
+    assert public_entries[0].display_name == first.display_name
+    assert public_entries[0].domain_tags == first.domain_tags
+    assert public_entries[0].connector == first.connector
+    assert public_entries[0].capabilities == ["profile", "search", "fetch", "context"]
+
+
+@pytest.mark.anyio
+async def test_malformed_domain_tag_is_quarantined_without_poisoning_neighbor(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    malformed_tag = "proxima centauri server"
+    _write_ics_source(
+        source_dir,
+        "01-valid.yaml",
+        source_id="valid_calendar",
+        enabled=False,
+        domain_tags=["calendar", "valid"],
+    )
+    _write_ics_source(
+        source_dir,
+        "02-malformed.yaml",
+        source_id="malformed_calendar",
+        enabled=False,
+        domain_tags=[malformed_tag],
+    )
+    caplog.set_level(logging.WARNING, logger=REGISTRY_LOGGER)
+    app = create_app(source_config_dir=source_dir)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/sources")
+
+    assert response.status_code == 200
+    assert response.json()["inventory_status"] == "partial"
+    assert [source["source_id"] for source in response.json()["sources"]] == [
+        "valid_calendar"
+    ]
+    assert malformed_tag not in response.text
+    assert "proxima-centauri-server" not in response.text
+    registry = app.state.source_registry
+    assert registry.get_source("malformed_calendar") is not None
+    assert registry.get_source_config("malformed_calendar") is not None
+    assert registry.get_source("malformed_calendar").domain_tags == [malformed_tag]
+    assert registry.get_source_config("malformed_calendar").domain_tags == [
+        malformed_tag
+    ]
+    assert malformed_tag not in caplog.text
+    assert (
+        "public_source_projection_quarantined "
+        "component=data-source-aggregator field=domain_tags "
+        "reason=invalid_identifier source_id=malformed_calendar"
+    ) in caplog.text
+
+
+def test_public_quarantine_does_not_change_internal_selection() -> None:
+    malformed_tag = "proxima centauri server"
+    source_config = _source_config(
+        source_id="operational_calendar",
+        domain_tags=[malformed_tag],
+        enabled=True,
+    )
+    registry = _source_registry([source_config])
+
+    assert registry.list_sources() == []
+    assert registry.get_source(source_config.source_id) is not None
+    assert registry.get_source_config(source_config.source_id) is source_config
+    assert registry.get_source(source_config.source_id).domain_tags == [malformed_tag]
+    assert registry.select_sources(
+        source_ids=[source_config.source_id],
+        allowed_sensitivity=Sensitivity.LOW,
+        required_capability="search",
+    ) == [source_config]
+
+
+@pytest.mark.parametrize(
+    ("config_overrides", "last_error", "expected_field", "expected_reason"),
+    [
+        pytest.param(
+            {"source_id": "s" * 121},
+            None,
+            "source_id",
+            "value_too_long",
+            id="source-id-too-long",
+        ),
+        pytest.param(
+            {"display_name": "D" * 241},
+            None,
+            "display_name",
+            "value_too_long",
+            id="display-name-too-long",
+        ),
+        pytest.param(
+            {"domain_tags": ["invalid domain tag"]},
+            None,
+            "domain_tags",
+            "invalid_identifier",
+            id="domain-tag-invalid-identifier",
+        ),
+        pytest.param(
+            {"domain_tags": ["d" * 121]},
+            None,
+            "domain_tags",
+            "value_too_long",
+            id="domain-tag-too-long",
+        ),
+        pytest.param(
+            {"domain_tags": [f"tag_{index}" for index in range(9)]},
+            None,
+            "domain_tags",
+            "collection_too_large",
+            id="too-many-domain-tags",
+        ),
+        pytest.param(
+            {"domain_tags": ["calendar", "calendar"]},
+            None,
+            "domain_tags",
+            "duplicate_items",
+            id="duplicate-domain-tags",
+        ),
+        pytest.param(
+            {},
+            "E" * 241,
+            "last_error",
+            "value_too_long",
+            id="last-error-too-long",
+        ),
+    ],
+)
+def test_each_supported_consumer_mismatch_is_quarantined(
+    config_overrides: dict[str, object],
+    last_error: str | None,
+    expected_field: str,
+    expected_reason: str,
+    caplog,
+) -> None:
+    caplog.set_level(logging.WARNING, logger=REGISTRY_LOGGER)
+    source_config = _source_config(**config_overrides)
+
+    registry = _source_registry(
+        [source_config],
+        last_errors=(
+            {source_config.source_id: last_error}
+            if last_error is not None
+            else None
+        ),
+    )
+
+    assert registry.list_sources() == []
+    assert registry.inventory_status == InventoryStatus.PARTIAL
+    assert registry.get_source(source_config.source_id) is not None
+    assert registry.get_source_config(source_config.source_id) is source_config
+    assert f"field={expected_field}" in caplog.text
+    assert f"reason={expected_reason}" in caplog.text
+
+
+def test_multiple_malformed_public_entries_preserve_valid_neighbors_and_order() -> None:
+    valid_first = _source_config(source_id="valid_first", domain_tags=["first"])
+    malformed_tag = _source_config(
+        source_id="malformed_tag",
+        domain_tags=["private malformed tag"],
+    )
+    valid_second = _source_config(source_id="valid_second", domain_tags=["second"])
+    malformed_name = _source_config(
+        source_id="malformed_name",
+        display_name="N" * 241,
+    )
+
+    registry = _source_registry(
+        [valid_first, malformed_tag, valid_second, malformed_name]
+    )
+
+    assert [entry.source_id for entry in registry.list_sources()] == [
+        "valid_first",
+        "valid_second",
+    ]
+    assert registry.inventory_status == InventoryStatus.PARTIAL
+    assert registry.get_source("malformed_tag") is not None
+    assert registry.get_source_config("malformed_tag") is malformed_tag
+    assert registry.get_source("malformed_name") is not None
+    assert registry.get_source_config("malformed_name") is malformed_name
+
+
+@pytest.mark.anyio
+async def test_all_malformed_public_entries_return_partial_empty_response(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_ics_source(
+        source_dir,
+        "01-malformed-tag.yaml",
+        source_id="malformed_tag",
+        enabled=False,
+        domain_tags=["private malformed tag"],
+    )
+    _write_ics_source(
+        source_dir,
+        "02-malformed-name.yaml",
+        source_id="malformed_name",
+        enabled=False,
+        display_name="N" * 241,
+    )
+    app = create_app(source_config_dir=source_dir)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/sources")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "inventory_scope": "configured_sources",
+        "inventory_status": "partial",
+        "sources": [],
+    }
+    registry = app.state.source_registry
+    assert registry.get_source("malformed_tag") is not None
+    assert registry.get_source_config("malformed_tag") is not None
+    assert registry.get_source("malformed_name") is not None
+    assert registry.get_source_config("malformed_name") is not None
+
+
+@pytest.mark.parametrize(
+    "base_status",
+    [InventoryStatus.PARTIAL, InventoryStatus.UNKNOWN, InventoryStatus.UNAVAILABLE],
+)
+def test_public_quarantine_does_not_promote_base_inventory_uncertainty(
+    base_status: InventoryStatus,
+) -> None:
+    source_config = _source_config(domain_tags=["private malformed tag"])
+
+    registry = _source_registry(
+        [source_config],
+        inventory_status=base_status,
+    )
+
+    assert registry.list_sources() == []
+    assert registry.inventory_status == base_status
+
+
+def test_quarantine_diagnostics_are_closed_and_do_not_expose_raw_values(
+    caplog,
+) -> None:
+    private_tag = "PRIVATE DOMAIN TAG SENTINEL"
+    private_display_name = "PRIVATE_DISPLAY_SENTINEL_" + "D" * 241
+    private_source_id = "private_source_id_sentinel_" + "s" * 121
+    private_description = "PRIVATE_DESCRIPTION_SENTINEL"
+    malformed_tag = _source_config(
+        source_id="safe_source",
+        domain_tags=[private_tag],
+        description=private_description,
+    )
+    malformed_name = _source_config(
+        source_id="safe_display_source",
+        display_name=private_display_name,
+        description=private_description,
+    )
+    malformed_id = _source_config(
+        source_id=private_source_id,
+        description=private_description,
+    )
+    caplog.set_level(logging.WARNING, logger=REGISTRY_LOGGER)
+
+    registry = _source_registry([malformed_tag, malformed_name, malformed_id])
+
+    assert registry.list_sources() == []
+    assert private_tag not in caplog.text
+    assert private_display_name not in caplog.text
+    assert private_source_id not in caplog.text
+    assert private_description not in caplog.text
+    assert "PRIVATE_CONFIG_SENTINEL" not in caplog.text
+    assert "String should" not in caplog.text
+    assert "input_value" not in caplog.text
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "public_source_projection_quarantined "
+        "component=data-source-aggregator field=domain_tags "
+        "reason=invalid_identifier source_id=safe_source",
+        "public_source_projection_quarantined "
+        "component=data-source-aggregator field=display_name "
+        "reason=value_too_long source_id=safe_display_source",
+        "public_source_projection_quarantined "
+        "component=data-source-aggregator field=source_id "
+        "reason=value_too_long source_id_state=omitted",
+    ]
