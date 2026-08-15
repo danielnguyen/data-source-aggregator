@@ -40,6 +40,7 @@ _PUBLIC_ENTRY_FIELDS = frozenset(
         "last_error",
         "authority_role",
         "scope_refs",
+        "content_fields",
     }
 )
 _PUBLIC_VALIDATION_REASONS = {
@@ -80,7 +81,10 @@ class SourceRegistry:
         self._public_entries: list[PublicSourceRegistryEntry] = []
         quarantined_count = 0
         for entry in entries:
-            public_entry = _project_public_entry(entry)
+            public_entry = _project_public_entry(
+                entry,
+                self._source_configs.get(entry.source_id),
+            )
             if public_entry is None:
                 quarantined_count += 1
                 continue
@@ -331,12 +335,20 @@ def build_empty_source_registry() -> SourceRegistry:
 
 def _project_public_entry(
     entry: SourceRegistryDetail,
+    source_config: SourceConfig | None,
 ) -> PublicSourceRegistryEntry | None:
     projection = entry.model_dump()
     if projection.get("scope_refs") is None:
         projection.pop("scope_refs", None)
     projection.pop("retrieval", None)
     projection.pop("profile", None)
+    if (
+        source_config is not None
+        and source_config.connector == "google_sheets"
+        and source_config.result_text is not None
+        and "include_fields" in source_config.result_text
+    ):
+        projection["content_fields"] = source_config.result_text["include_fields"]
     try:
         return PublicSourceRegistryEntry.model_validate(projection)
     except ValidationError as error:

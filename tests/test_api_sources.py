@@ -361,10 +361,11 @@ scope_refs:
 sensitivity: low
 access_mode: read_only
 connector_config:
-  spreadsheet_id: sheet-secret-id
-  worksheet: Maintenance
+  spreadsheet_id: PRIVATE-SPREADSHEET-SENTINEL
+  worksheet: PRIVATE-WORKSHEET-SENTINEL
   header_row: 1
   credentials_ref: google_sheets_readonly
+  private_token: PRIVATE-CREDENTIAL-SENTINEL
 retrieval:
   default_mode: targeted
   max_results: 20
@@ -372,6 +373,14 @@ retrieval:
   max_text_chars: 40000
   max_context_rows: 250
   allow_full_fetch: true
+result_text:
+  title_from: Date
+  include_fields:
+    - Remaining Fuel
+    - Date
+    - Fuel (L)
+    - Comments/Repair Notes
+  private_value: PRIVATE-ROW-VALUE-SENTINEL
 """,
         encoding="utf-8",
     )
@@ -400,8 +409,18 @@ retrieval:
         "domain": "vehicle-maintenance",
         "project": "vehicle-log",
     }
+    assert payload["sources"][0]["content_fields"] == [
+        "Comments/Repair Notes",
+        "Date",
+        "Fuel (L)",
+        "Remaining Fuel",
+    ]
     assert "connector_config" not in payload["sources"][0]
-    assert "sheet-secret-id" not in str(payload)
+    assert "result_text" not in str(payload)
+    assert "PRIVATE-SPREADSHEET-SENTINEL" not in str(payload)
+    assert "PRIVATE-WORKSHEET-SENTINEL" not in str(payload)
+    assert "PRIVATE-CREDENTIAL-SENTINEL" not in str(payload)
+    assert "PRIVATE-ROW-VALUE-SENTINEL" not in str(payload)
 
     assert detail_response.status_code == 200
     detail_payload = detail_response.json()
@@ -422,7 +441,11 @@ retrieval:
         detail_payload["source"]["profile"]["summary"]
         == "Google Sheets source with read-only row and range retrieval."
     )
-    assert "sheet-secret-id" not in str(detail_payload)
+    assert "content_fields" not in detail_payload["source"]
+    assert "PRIVATE-SPREADSHEET-SENTINEL" not in str(detail_payload)
+    assert "PRIVATE-WORKSHEET-SENTINEL" not in str(detail_payload)
+    assert "PRIVATE-CREDENTIAL-SENTINEL" not in str(detail_payload)
+    assert "PRIVATE-ROW-VALUE-SENTINEL" not in str(detail_payload)
 
 
 @pytest.mark.anyio
@@ -490,6 +513,83 @@ retrieval:
     assert detail["last_checked_at"] == "2026-06-10T00:00:00Z"
     assert detail["last_error"] == "source_unavailable"
     assert "scope_refs" not in detail
+    assert "content_fields" not in payload["sources"][0]
+
+
+@pytest.mark.anyio
+async def test_malformed_content_fields_do_not_poison_valid_inventory_neighbor(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_ics_source(
+        source_dir,
+        "01-valid.yaml",
+        source_id="valid_schedule",
+        enabled=False,
+    )
+    (source_dir / "02-malformed.yaml").write_text(
+        """
+source_id: malformed_records
+display_name: Malformed Records
+description: PRIVATE-DESCRIPTION-SENTINEL
+domain_tags: [records]
+connector: google_sheets
+enabled: false
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id: PRIVATE-SPREADSHEET-SENTINEL
+  worksheet: PRIVATE-WORKSHEET-SENTINEL
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  allow_full_fetch: true
+result_text:
+  include_fields: null
+  private_value: PRIVATE-CONTENT-VALUE-SENTINEL
+""",
+        encoding="utf-8",
+    )
+    caplog.set_level(logging.WARNING, logger=REGISTRY_LOGGER)
+    app = create_app(source_config_dir=source_dir)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/sources",
+            headers={"X-Request-ID": "content-fields-quarantine-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "content-fields-quarantine-1"
+    assert response.json()["inventory_status"] == "partial"
+    assert [source["source_id"] for source in response.json()["sources"]] == [
+        "valid_schedule"
+    ]
+    assert "content_fields" not in response.json()["sources"][0]
+    assert "PRIVATE-SPREADSHEET-SENTINEL" not in response.text
+    assert "PRIVATE-WORKSHEET-SENTINEL" not in response.text
+    assert "PRIVATE-DESCRIPTION-SENTINEL" not in response.text
+    assert "PRIVATE-CONTENT-VALUE-SENTINEL" not in response.text
+    assert "PRIVATE-SPREADSHEET-SENTINEL" not in caplog.text
+    assert "PRIVATE-WORKSHEET-SENTINEL" not in caplog.text
+    assert "PRIVATE-DESCRIPTION-SENTINEL" not in caplog.text
+    assert "PRIVATE-CONTENT-VALUE-SENTINEL" not in caplog.text
+    assert (
+        "public_source_projection_quarantined "
+        "component=data-source-aggregator field=content_fields "
+        "reason=invalid_value source_id=malformed_records"
+    ) in caplog.text
+    assert app.state.source_registry.get_source("malformed_records") is not None
+    assert app.state.source_registry.get_source_config("malformed_records") is not None
 
 
 @pytest.mark.anyio
