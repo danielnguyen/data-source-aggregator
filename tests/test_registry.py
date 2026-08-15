@@ -68,6 +68,167 @@ async def test_build_source_registry_exposes_safe_fields_only(
 
 
 @pytest.mark.anyio
+async def test_registry_projects_configured_google_sheet_content_fields() -> None:
+    source_config = SourceConfig.model_validate(
+        {
+            "source_id": "configured_records",
+            "display_name": "Configured Records",
+            "description": "Neutral configured records.",
+            "domain_tags": ["records"],
+            "connector": "google_sheets",
+            "enabled": False,
+            "sensitivity": "low",
+            "access_mode": "read_only",
+            "connector_config": {
+                "spreadsheet_id": "PRIVATE-SPREADSHEET-SENTINEL",
+                "worksheet": "PRIVATE-WORKSHEET-SENTINEL",
+                "header_row": 1,
+                "credential": "PRIVATE-CREDENTIAL-SENTINEL",
+            },
+            "retrieval": {
+                "default_mode": "targeted",
+                "max_results": 20,
+                "max_bytes": 100000,
+                "max_text_chars": 40000,
+                "allow_full_fetch": True,
+            },
+            "result_text": {
+                "title_from": "Date",
+                "include_fields": [
+                    "Remaining Fuel",
+                    "Date",
+                    "Fuel (L)",
+                    "Comments/Repair Notes",
+                ],
+                "private_value": "PRIVATE-ROW-VALUE-SENTINEL",
+            },
+        }
+    )
+
+    registry = await build_source_registry([source_config])
+    public_dump = registry.list_sources()[0].model_dump(mode="json")
+    detail = registry.get_source(source_config.source_id)
+
+    assert public_dump["content_fields"] == [
+        "Comments/Repair Notes",
+        "Date",
+        "Fuel (L)",
+        "Remaining Fuel",
+    ]
+    assert "result_text" not in public_dump
+    assert "connector_config" not in public_dump
+    assert "PRIVATE-SPREADSHEET-SENTINEL" not in str(public_dump)
+    assert "PRIVATE-WORKSHEET-SENTINEL" not in str(public_dump)
+    assert "PRIVATE-CREDENTIAL-SENTINEL" not in str(public_dump)
+    assert "PRIVATE-ROW-VALUE-SENTINEL" not in str(public_dump)
+    assert detail is not None
+    assert detail.source_id == source_config.source_id
+    assert registry.get_source_config(source_config.source_id) is source_config
+
+
+@pytest.mark.anyio
+async def test_registry_omits_unconfigured_and_non_google_content_fields(
+    source_config_factory,
+) -> None:
+    google_source = source_config_factory(
+        source_id="configured_records",
+        enabled=False,
+    )
+    calendar_source = source_config_factory(
+        source_id="public_schedule",
+        connector="ics_calendar",
+        enabled=False,
+        connector_config={
+            "url": "https://private.example.test/schedule.ics",
+            "timezone": "UTC",
+        },
+        result_text={"include_fields": ["Start Time", "Summary"]},
+    )
+
+    registry = await build_source_registry([google_source, calendar_source])
+    public_dumps = [entry.model_dump(mode="json") for entry in registry.list_sources()]
+
+    assert [entry["source_id"] for entry in public_dumps] == [
+        "configured_records",
+        "public_schedule",
+    ]
+    assert all("content_fields" not in entry for entry in public_dumps)
+    assert registry.get_source("configured_records") is not None
+    assert registry.get_source("public_schedule") is not None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("include_fields", "expected_reason"),
+    [
+        pytest.param(None, "invalid_value", id="explicit-null"),
+        pytest.param(
+            [f"Field {index}" for index in range(25)],
+            "collection_too_large",
+            id="too-many-fields",
+        ),
+        pytest.param(["   "], "invalid_value", id="blank-field"),
+        pytest.param(
+            ["Duplicate Field", "Duplicate Field"],
+            "duplicate_items",
+            id="duplicate-field",
+        ),
+        pytest.param(["F" * 121], "value_too_long", id="field-too-long"),
+        pytest.param(["Unsafe\x00Field"], "invalid_value", id="control-character"),
+        pytest.param([7], "invalid_value", id="non-string-field"),
+        pytest.param(
+            [{"name": "Nested Field"}],
+            "invalid_value",
+            id="nested-object",
+        ),
+        pytest.param([["Nested Field"]], "invalid_value", id="nested-list"),
+    ],
+)
+async def test_malformed_content_fields_quarantine_only_public_projection(
+    source_config_factory,
+    include_fields: object,
+    expected_reason: str,
+    caplog,
+) -> None:
+    valid_neighbor = source_config_factory(
+        source_id="valid_neighbor",
+        enabled=False,
+        result_text={"include_fields": ["Date", "Quantity"]},
+    )
+    malformed_source = source_config_factory(
+        source_id="malformed_fields",
+        enabled=False,
+        description="PRIVATE-DESCRIPTION-SENTINEL",
+        result_text={
+            "include_fields": include_fields,
+            "private_value": "PRIVATE-CONTENT-VALUE-SENTINEL",
+        },
+    )
+    caplog.set_level("WARNING", logger="uvicorn.error.data_source_aggregator.registry")
+
+    registry = await build_source_registry([valid_neighbor, malformed_source])
+    public_dumps = [entry.model_dump(mode="json") for entry in registry.list_sources()]
+
+    assert len(public_dumps) == 1
+    assert public_dumps[0]["source_id"] == "valid_neighbor"
+    assert public_dumps[0]["content_fields"] == ["Date", "Quantity"]
+    assert registry.inventory_status is InventoryStatus.PARTIAL
+    assert registry.get_source("malformed_fields") is not None
+    assert registry.get_source_config("malformed_fields") is malformed_source
+    assert malformed_source.result_text is not None
+    assert malformed_source.result_text["include_fields"] == include_fields
+    assert "PRIVATE-DESCRIPTION-SENTINEL" not in str(public_dumps)
+    assert "PRIVATE-CONTENT-VALUE-SENTINEL" not in str(public_dumps)
+    assert "PRIVATE-DESCRIPTION-SENTINEL" not in caplog.text
+    assert "PRIVATE-CONTENT-VALUE-SENTINEL" not in caplog.text
+    assert (
+        "public_source_projection_quarantined "
+        "component=data-source-aggregator field=content_fields "
+        f"reason={expected_reason} source_id=malformed_fields"
+    ) in caplog.text
+
+
+@pytest.mark.anyio
 async def test_registry_detail_includes_safe_profile_and_retrieval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

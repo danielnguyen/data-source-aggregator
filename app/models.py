@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from datetime import date, datetime
 from enum import Enum
@@ -111,6 +112,11 @@ PublicSourceIdentifier = Annotated[
         max_length=120,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
     ),
+]
+
+PublicContentField = Annotated[
+    str,
+    Field(strict=True, min_length=1, max_length=120),
 ]
 
 
@@ -233,6 +239,10 @@ class PublicSourceRegistryEntry(BaseModel):
     last_checked_at: datetime | None
     last_error: str | None = Field(default=None, max_length=240)
     scope_refs: MaterialScopeReferences | None = None
+    content_fields: list[PublicContentField] | None = Field(
+        default=None,
+        max_length=24,
+    )
 
     @field_validator("domain_tags", "capabilities")
     @classmethod
@@ -240,6 +250,41 @@ class PublicSourceRegistryEntry(BaseModel):
         if len(value) != len(set(value)):
             raise PydanticCustomError("duplicate_items", "Collection items must be unique.")
         return value
+
+    @field_validator("content_fields", mode="before")
+    @classmethod
+    def validate_content_fields_collection(cls, value: object) -> object:
+        if value is None:
+            raise PydanticCustomError(
+                "invalid_value",
+                "content_fields must not be null when supplied.",
+            )
+        if not isinstance(value, list):
+            raise PydanticCustomError(
+                "invalid_value",
+                "content_fields must be a list when supplied.",
+            )
+        return value
+
+    @field_validator("content_fields")
+    @classmethod
+    def validate_and_sort_content_fields(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value):
+            raise PydanticCustomError(
+                "invalid_value",
+                "content_fields must not contain blank values.",
+            )
+        if any(re.search(r"[\x00-\x1f\x7f]", item) for item in value):
+            raise PydanticCustomError(
+                "invalid_value",
+                "content_fields must not contain control characters.",
+            )
+        if len(value) != len(set(value)):
+            raise PydanticCustomError(
+                "duplicate_items",
+                "content_fields items must be unique.",
+            )
+        return sorted(value)
 
     @model_validator(mode="after")
     def validate_scope_refs_presence(self) -> "PublicSourceRegistryEntry":
@@ -251,10 +296,12 @@ class PublicSourceRegistryEntry(BaseModel):
         return self
 
     @model_serializer(mode="wrap")
-    def omit_absent_scope_refs(self, handler):
+    def omit_absent_optional_fields(self, handler):
         serialized = handler(self)
         if self.scope_refs is None:
             serialized.pop("scope_refs", None)
+        if self.content_fields is None:
+            serialized.pop("content_fields", None)
         return serialized
 
 
