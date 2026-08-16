@@ -9,10 +9,12 @@ from app.errors import ServiceError
 from app.models import (
     AvailableContext,
     ContextPackItem,
+    ContextRequest,
     MaterialScopeReferences,
     ResultEnvelope,
     RetrievalBudget,
     SourceConfig,
+    StructuredFieldValues,
 )
 from app.services.budget import build_effective_budget, enforce_budget
 
@@ -91,6 +93,121 @@ def test_retrieval_budget_requires_at_least_one_field() -> None:
         RetrievalBudget()
 
 
+def test_context_request_accepts_exact_configured_field_name() -> None:
+    request = ContextRequest(
+        source_ref="google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+        context_mode="configured_field_values",
+        field_name="Fuel (L)",
+    )
+
+    assert request.field_name == "Fuel (L)"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "context_mode": "configured_field_values",
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "context_mode": "nearby_rows",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "context_mode": "configured_worksheet",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "context_mode": "nearby_rows",
+            "field_name": None,
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "context_mode": "sheet_profile",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "context_mode": "configured_field_values",
+            "field_name": "",
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "context_mode": "configured_field_values",
+            "field_name": " Fuel (L)",
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel (L) ",
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel\x00(L)",
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "context_mode": "configured_field_values",
+            "field_name": "x" * 121,
+        },
+    ],
+)
+def test_context_request_rejects_invalid_field_name_contract(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        ContextRequest.model_validate(payload)
+
+
+def test_structured_field_values_are_typed_bounded_and_ordered() -> None:
+    structured_data = StructuredFieldValues(
+        kind="field_values",
+        field_name="Fuel (L)",
+        record_count=4,
+        non_empty_value_count=3,
+        values=["42.1", None, "38.7", "42.1"],
+    )
+
+    assert structured_data.model_dump(mode="json") == {
+        "kind": "field_values",
+        "field_name": "Fuel (L)",
+        "record_count": 4,
+        "non_empty_value_count": 3,
+        "values": ["42.1", None, "38.7", "42.1"],
+    }
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"record_count": 1},
+        {"non_empty_value_count": 2},
+        {"values": ["1"] * 251, "record_count": 251, "non_empty_value_count": 251},
+        {"values": [1], "record_count": 1, "non_empty_value_count": 1},
+        {"kind": "rows"},
+    ],
+)
+def test_structured_field_values_reject_incoherent_or_unbounded_data(
+    updates: dict[str, object],
+) -> None:
+    payload: dict[str, object] = {
+        "kind": "field_values",
+        "field_name": "Fuel (L)",
+        "record_count": 2,
+        "non_empty_value_count": 1,
+        "values": ["42.1", None],
+    }
+    payload.update(updates)
+
+    with pytest.raises(ValidationError):
+        StructuredFieldValues.model_validate(payload)
+
+
 def test_result_envelope_defaults_are_stable() -> None:
     result_envelope = ResultEnvelope(
         result_id="r_123",
@@ -111,6 +228,7 @@ def test_result_envelope_defaults_are_stable() -> None:
     assert dumped["confidence"] == "none"
     assert dumped["available_context"] == []
     assert dumped["raw"] == {}
+    assert "structured_data" not in dumped
 
 
 def test_available_context_descriptor_is_strict_and_bounded() -> None:

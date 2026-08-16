@@ -24,6 +24,7 @@ from app.models import (
     SourceConfig,
     SourceHealth,
     SourceStatus,
+    StructuredFieldValues,
 )
 from app.services.relevance import build_query_relevance_profile, overlap_score, tokenize_text
 from app.services.result_text import render_row_text
@@ -41,6 +42,8 @@ CONFIGURED_WORKSHEET_CONTEXT_MODE = "configured_worksheet"
 CONFIGURED_WORKSHEET_CONTEXT_DESCRIPTION = (
     "Fetch every non-empty record from the configured worksheet."
 )
+CONFIGURED_FIELD_VALUES_CONTEXT_MODE = "configured_field_values"
+MAX_STRUCTURED_FIELD_VALUE_RECORDS = 250
 
 
 class GoogleSheetsClient:
@@ -220,6 +223,7 @@ class GoogleSheetsConnector:
         if request.context_mode not in {
             NEARBY_ROWS_CONTEXT_MODE,
             CONFIGURED_WORKSHEET_CONTEXT_MODE,
+            CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
         }:
             raise ServiceError(
                 "unsupported_operation",
@@ -229,13 +233,16 @@ class GoogleSheetsConnector:
             )
 
         parsed = self._validated_source_ref(request.source_ref, source_config)
-        if request.context_mode == CONFIGURED_WORKSHEET_CONTEXT_MODE:
+        if request.context_mode in {
+            CONFIGURED_WORKSHEET_CONTEXT_MODE,
+            CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+        }:
             if not source_config.retrieval.allow_full_fetch:
                 raise ServiceError(
                     "unsupported_operation",
                     (
-                        "Context mode 'configured_worksheet' is not enabled for "
-                        "the configured source."
+                        f"Context mode '{request.context_mode}' is not enabled "
+                        "for the configured source."
                     ),
                     status_code=501,
                     details={
@@ -243,7 +250,13 @@ class GoogleSheetsConnector:
                         "operation": "context",
                     },
                 )
-            return self._configured_worksheet_context(
+            if request.context_mode == CONFIGURED_WORKSHEET_CONTEXT_MODE:
+                return self._configured_worksheet_context(
+                    request,
+                    source_config,
+                    parsed,
+                )
+            return self._configured_field_values_context(
                 request,
                 source_config,
                 parsed,
@@ -345,6 +358,125 @@ class GoogleSheetsConnector:
                 include_raw=False,
             )
         ]
+
+    def _configured_field_values_context(
+        self,
+        request: ContextRequest,
+        source_config: SourceConfig,
+        parsed: "ParsedGoogleSheetsSourceRef",
+    ) -> list[ResultEnvelope]:
+        field_name = request.field_name
+        if field_name is None or field_name not in self._configured_result_fields(
+            source_config
+        ):
+            raise ServiceError(
+                "unsupported_operation",
+                "The requested configured field is not available for this source.",
+                status_code=501,
+                details={
+                    "context_mode": request.context_mode,
+                    "operation": "context",
+                },
+            )
+
+        sheet_rows = self._load_sheet_rows(source_config)
+        if not sheet_rows:
+            return []
+
+        row_limit = min(
+            self._effective_context_row_limit(request, source_config),
+            MAX_STRUCTURED_FIELD_VALUE_RECORDS,
+        )
+        if len(sheet_rows) > row_limit:
+            raise ServiceError(
+                "result_too_large",
+                "The configured worksheet exceeds the permitted field-value row limit.",
+                status_code=413,
+                details={"max_rows": row_limit},
+            )
+
+        complete_range = self._complete_range(source_config, parsed, sheet_rows)
+        values = [
+            sheet_row.values_by_header.get(field_name) or None
+            for sheet_row in sheet_rows
+        ]
+        structured_data = StructuredFieldValues(
+            kind="field_values",
+            field_name=field_name,
+            record_count=len(values),
+            non_empty_value_count=sum(value is not None for value in values),
+            values=values,
+        )
+        return [
+            ResultEnvelope(
+                result_id=f"r_{uuid4().hex}",
+                source_type="google_sheets",
+                source_id=source_config.source_id,
+                source_name=source_config.display_name,
+                source_ref=(
+                    f"google_sheets:{source_config.source_id}:"
+                    f"{complete_range.original_locator}"
+                ),
+                retrieved_at=self._now_factory(),
+                cache_status=CacheStatus.LIVE,
+                title=f"Configured values for {field_name}",
+                content_type="structured_field_values",
+                text=(
+                    f"Retrieved {len(values)} configured records for the requested "
+                    "field."
+                ),
+                confidence=Confidence.HIGH,
+                raw=None,
+                structured_data=structured_data,
+                available_context=[],
+            )
+        ]
+
+    def _configured_result_fields(self, source_config: SourceConfig) -> list[str]:
+        result_text = source_config.result_text
+        include_fields = (
+            result_text.get("include_fields")
+            if isinstance(result_text, dict)
+            else None
+        )
+        if (
+            not isinstance(include_fields, list)
+            or not include_fields
+            or len(include_fields) > 24
+            or any(
+                not isinstance(field, str)
+                or not field.strip()
+                or field != field.strip()
+                or len(field) > 120
+                or re.search(r"[\x00-\x1f\x7f]", field)
+                for field in include_fields
+            )
+            or len(include_fields) != len(set(include_fields))
+        ):
+            return []
+        return include_fields
+
+    def _complete_range(
+        self,
+        source_config: SourceConfig,
+        parsed: "ParsedGoogleSheetsSourceRef",
+        sheet_rows: list[SheetRow],
+    ) -> "ParsedGoogleSheetsSourceRef":
+        first_row = sheet_rows[0]
+        last_row = sheet_rows[-1]
+        worksheet_locator = (
+            f"{quote_worksheet_name(parsed.worksheet)}!"
+            f"A{first_row.row_number}:{last_row.end_col}{last_row.row_number}"
+        )
+        return ParsedGoogleSheetsSourceRef(
+            source_id=source_config.source_id,
+            worksheet=parsed.worksheet,
+            start_col="A",
+            start_row=first_row.row_number,
+            end_col=last_row.end_col,
+            end_row=last_row.row_number,
+            original_locator=worksheet_locator,
+        )
 
     def _effective_context_row_limit(
         self,

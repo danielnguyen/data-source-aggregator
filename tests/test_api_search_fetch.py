@@ -80,6 +80,45 @@ retrieval:
     )
 
 
+def _write_field_values_source_config(
+    source_dir: Path,
+    *,
+    allow_full_fetch: bool = True,
+    max_context_rows: int = 250,
+) -> None:
+    (source_dir / "source.yaml").write_text(
+        f"""
+source_id: configured_measurements
+display_name: Configured Measurements
+description: Controlled configured measurements.
+domain_tags: [measurements]
+connector: google_sheets
+enabled: true
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id: PRIVATE-SPREADSHEET-SENTINEL
+  worksheet: Measurements
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  max_context_rows: {max_context_rows}
+  allow_full_fetch: {str(allow_full_fetch).lower()}
+result_text:
+  title_from: Entry
+  include_fields:
+    - Entry
+    - Date
+    - Fuel (L)
+""",
+        encoding="utf-8",
+    )
+
+
 def _write_multi_source_configs(source_dir: Path, *, reverse_order: bool = False) -> None:
     sources = [
         (
@@ -206,14 +245,19 @@ retrieval:
         (source_dir / filename).write_text(content, encoding="utf-8")
 
 
-def _write_credentials_config(tmp_path: Path, monkeypatch) -> None:
+def _write_credentials_config(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    credential_path: str = "secrets/google_sheets_readonly.json",
+) -> None:
     credentials_path = tmp_path / "credentials.yaml"
     credentials_path.write_text(
-        """
+        f"""
 credentials:
   google_sheets_readonly:
     type: google_service_account_file
-    path: secrets/google_sheets_readonly.json
+    path: {credential_path}
 """,
         encoding="utf-8",
     )
@@ -761,6 +805,40 @@ def configured_worksheet_api_connector(monkeypatch):
     return connector, client
 
 
+@pytest.fixture
+def configured_field_values_api_connector(monkeypatch):
+    rows = [
+        ["Entry", "Date", "Fuel (L)", "Private Notes"],
+        ["Alpha", "2026-05-01", "42.1", "UNRELATED-ROW-VALUE-SENTINEL-A"],
+        ["Beta", "2026-05-02", "", "UNRELATED-ROW-VALUE-SENTINEL-B"],
+        ["Gamma", "2026-05-03", "38.7", "UNRELATED-ROW-VALUE-SENTINEL-C"],
+        ["Delta", "2026-05-04", "41.0", "UNRELATED-ROW-VALUE-SENTINEL-D"],
+    ]
+    client = MultiSourceFakeGoogleSheetsClient(
+        {
+            "PRIVATE-SPREADSHEET-SENTINEL": {
+                "Measurements": rows,
+                "Measurements!A1:A1": [rows[0]],
+            }
+        }
+    )
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: client,
+        now_factory=lambda: datetime(2026, 6, 10, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        fetch_service.connector_base,
+        "get_connector",
+        lambda _: connector,
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "get_connector",
+        lambda _: connector,
+    )
+    return connector, client
+
+
 @pytest.mark.anyio
 async def test_search_route_validates_request_shape(
     tmp_path: Path,
@@ -1056,6 +1134,7 @@ async def test_configured_worksheet_context_route_returns_complete_raw_free_rang
         "Notes: Tire rotation completed"
     )
     assert result["raw"] is None
+    assert "structured_data" not in result
     assert result["available_context"] == []
     assert payload["budget"] == {
         "max_results": 20,
@@ -1155,6 +1234,288 @@ async def test_configured_worksheet_context_route_fails_without_partial_results(
     assert audit_event["status"] == "error"
     assert audit_event["error_code"] == "result_too_large"
     assert "Oil change" not in json.dumps(audit_event)
+
+
+@pytest.mark.anyio
+async def test_configured_field_values_context_route_returns_private_bounded_projection(
+    tmp_path: Path,
+    monkeypatch,
+    configured_field_values_api_connector,
+) -> None:
+    _, google_client = configured_field_values_api_connector
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(
+        tmp_path,
+        monkeypatch,
+        credential_path="secrets/PRIVATE-CREDENTIAL-SENTINEL.json",
+    )
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_field_values_source_config(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/context",
+            headers={"X-Request-ID": "field-values-request"},
+            json={
+                "source_ref": (
+                    "google_sheets:configured_measurements:Measurements!A4:D4"
+                ),
+                "context_mode": "configured_field_values",
+                "field_name": "Fuel (L)",
+                "budget": {
+                    "max_rows": 10,
+                    "max_bytes": 50000,
+                    "max_text_chars": 12000,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "field-values-request"
+    payload = response.json()
+    assert payload["answerable"] is True
+    assert payload["retrieval_mode"] == "context"
+    assert payload["budget"]["truncated"] is False
+    assert len(payload["results"]) == 1
+    result = payload["results"][0]
+    assert result["source_id"] == "configured_measurements"
+    assert result["source_ref"] == (
+        "google_sheets:configured_measurements:Measurements!A2:D5"
+    )
+    assert result["content_type"] == "structured_field_values"
+    assert result["text"] == (
+        "Retrieved 4 configured records for the requested field."
+    )
+    assert result["raw"] is None
+    assert result["available_context"] == []
+    assert result["structured_data"] == {
+        "kind": "field_values",
+        "field_name": "Fuel (L)",
+        "record_count": 4,
+        "non_empty_value_count": 3,
+        "values": ["42.1", None, "38.7", "41.0"],
+    }
+    assert payload["budget"] == {
+        "max_results": 20,
+        "returned_results": 1,
+        "estimated_bytes": len(json.dumps(result).encode("utf-8")),
+        "truncated": False,
+    }
+    assert all(value not in result["text"] for value in ("42.1", "38.7", "41.0"))
+    serialized_payload = json.dumps(payload)
+    assert "UNRELATED-ROW-VALUE-SENTINEL" not in serialized_payload
+    assert "PRIVATE-SPREADSHEET-SENTINEL" not in serialized_payload
+    assert "PRIVATE-CREDENTIAL-SENTINEL" not in serialized_payload
+    assert "result_text" not in serialized_payload
+    assert google_client.calls == [
+        ("PRIVATE-SPREADSHEET-SENTINEL", "Measurements!A1:A1"),
+        ("PRIVATE-SPREADSHEET-SENTINEL", "Measurements"),
+    ]
+
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["operation"] == "context"
+    assert audit_event["status"] == "success"
+    assert audit_event["result_count"] == 1
+    assert audit_event["estimated_bytes"] == payload["budget"]["estimated_bytes"]
+    serialized_audit = json.dumps(audit_event)
+    for private_value in (
+        "Fuel (L)",
+        "42.1",
+        "38.7",
+        "41.0",
+        "UNRELATED-ROW-VALUE-SENTINEL",
+        "PRIVATE-SPREADSHEET-SENTINEL",
+        "PRIVATE-CREDENTIAL-SENTINEL",
+        "configured_field_values",
+    ):
+        assert private_value not in serialized_audit
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "request_json",
+    [
+        {
+            "source_ref": (
+                "google_sheets:configured_measurements:Measurements!A2:D2"
+            ),
+            "context_mode": "configured_field_values",
+            "budget": {"max_rows": 10},
+        },
+        {
+            "source_ref": (
+                "google_sheets:configured_measurements:Measurements!A2:D2"
+            ),
+            "context_mode": "configured_worksheet",
+            "field_name": "Fuel (L)",
+            "budget": {"max_rows": 10},
+        },
+    ],
+    ids=["missing-field-name", "field-name-on-configured-worksheet"],
+)
+async def test_configured_field_values_route_rejects_invalid_request_contract(
+    tmp_path: Path,
+    monkeypatch,
+    configured_field_values_api_connector,
+    request_json: dict[str, object],
+) -> None:
+    _write_credentials_config(
+        tmp_path,
+        monkeypatch,
+        credential_path="secrets/PRIVATE-CREDENTIAL-SENTINEL.json",
+    )
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_field_values_source_config(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/v1/sources/context", json=request_json)
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert "structured_data" not in json.dumps(response.json())
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field_name", "allow_full_fetch", "source_ref", "expected_status", "expected_code"),
+    [
+        (
+            "Private Notes",
+            True,
+            "google_sheets:configured_measurements:Measurements!A2:D2",
+            501,
+            "unsupported_operation",
+        ),
+        (
+            "Fuel (L)",
+            False,
+            "google_sheets:configured_measurements:Measurements!A2:D2",
+            501,
+            "unsupported_operation",
+        ),
+        (
+            "Fuel (L)",
+            True,
+            "google_sheets:configured_measurements:Other!A2:D2",
+            400,
+            "invalid_source_ref",
+        ),
+    ],
+    ids=["field-not-configured", "full-fetch-disabled", "wrong-worksheet"],
+)
+async def test_configured_field_values_route_fails_closed_without_leakage(
+    tmp_path: Path,
+    monkeypatch,
+    configured_field_values_api_connector,
+    field_name: str,
+    allow_full_fetch: bool,
+    source_ref: str,
+    expected_status: int,
+    expected_code: str,
+) -> None:
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(
+        tmp_path,
+        monkeypatch,
+        credential_path="secrets/PRIVATE-CREDENTIAL-SENTINEL.json",
+    )
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_field_values_source_config(
+        source_dir,
+        allow_full_fetch=allow_full_fetch,
+    )
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/context",
+            json={
+                "source_ref": source_ref,
+                "context_mode": "configured_field_values",
+                "field_name": field_name,
+                "budget": {"max_rows": 10, "max_bytes": 50000},
+            },
+        )
+
+    assert response.status_code == expected_status
+    payload = response.json()
+    assert payload["error"]["code"] == expected_code
+    serialized = json.dumps(payload)
+    assert "structured_data" not in serialized
+    assert "UNRELATED-ROW-VALUE-SENTINEL" not in serialized
+    assert "PRIVATE-SPREADSHEET-SENTINEL" not in serialized
+    assert "PRIVATE-CREDENTIAL-SENTINEL" not in serialized
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["operation"] == "context"
+    assert audit_event["status"] == "error"
+    assert audit_event["error_code"] == expected_code
+    assert field_name not in json.dumps(audit_event)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("max_context_rows", "budget"),
+    [
+        (3, {"max_rows": 10, "max_bytes": 50000}),
+        (250, {"max_rows": 3, "max_bytes": 50000}),
+        (250, {"max_rows": 10, "max_bytes": 100}),
+    ],
+    ids=["configured-row-limit", "request-row-limit", "byte-limit"],
+)
+async def test_configured_field_values_route_rejects_partial_vectors(
+    tmp_path: Path,
+    monkeypatch,
+    configured_field_values_api_connector,
+    max_context_rows: int,
+    budget: dict[str, int],
+) -> None:
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(
+        tmp_path,
+        monkeypatch,
+        credential_path="secrets/PRIVATE-CREDENTIAL-SENTINEL.json",
+    )
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_field_values_source_config(
+        source_dir,
+        max_context_rows=max_context_rows,
+    )
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/context",
+            json={
+                "source_ref": (
+                    "google_sheets:configured_measurements:Measurements!A2:D2"
+                ),
+                "context_mode": "configured_field_values",
+                "field_name": "Fuel (L)",
+                "budget": budget,
+            },
+        )
+
+    assert response.status_code == 413
+    payload = response.json()
+    assert payload["error"]["code"] == "result_too_large"
+    serialized = json.dumps(payload)
+    assert "structured_data" not in serialized
+    assert "42.1" not in serialized
+    assert "UNRELATED-ROW-VALUE-SENTINEL" not in serialized
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["operation"] == "context"
+    assert audit_event["status"] == "error"
+    assert audit_event["error_code"] == "result_too_large"
+    assert "Fuel (L)" not in json.dumps(audit_event)
 
 
 @pytest.mark.anyio

@@ -7,6 +7,7 @@ import pytest
 from app.connectors import base as connector_base
 from app.connectors.base import StubConnector, get_connector
 from app.connectors.google_sheets import (
+    CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
     CONFIGURED_WORKSHEET_CONTEXT_DESCRIPTION,
     CONFIGURED_WORKSHEET_CONTEXT_MODE,
     NEARBY_ROWS_CONTEXT_DESCRIPTION,
@@ -546,6 +547,7 @@ async def test_configured_worksheet_returns_the_same_complete_ordered_range(
     assert result.content_type == "spreadsheet_range"
     assert result.title == "Maintenance rows 2-6"
     assert result.raw is None
+    assert "structured_data" not in result.model_dump(mode="json")
     assert result.available_context == []
     assert [
         result.text.index(title)
@@ -569,6 +571,223 @@ async def test_configured_worksheet_returns_the_same_complete_ordered_range(
     assert "sheet-id" not in result.model_dump_json()
     assert "google_sheets_readonly" not in result.model_dump_json()
     assert client.calls == [("sheet-id", "Maintenance")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("seed_row", [2, 3, 5])
+async def test_configured_field_values_returns_complete_ordered_projection(
+    source_config_factory,
+    seed_row: int,
+) -> None:
+    rows = [
+        ["Date", "Task", "Fuel (L)", "Notes", "Private Column"],
+        ["2026-05-01", "Fuel stop", "42.1", "north", "PRIVATE-ROW-A"],
+        ["2026-05-02", "Fuel stop", "", "missing", "PRIVATE-ROW-B"],
+        ["2026-05-03", "Fuel stop", "38.7", "south", "PRIVATE-ROW-C"],
+        ["2026-05-04", "Fuel stop", "42.1", "repeat", "PRIVATE-ROW-D"],
+    ]
+    source_config = source_config_factory(
+        result_text={
+            "title_from": "Task",
+            "include_fields": ["Date", "Task", "Fuel (L)", "Notes"],
+        },
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "max_context_rows": 10,
+            "allow_full_fetch": True,
+        },
+    )
+    client = FakeGoogleSheetsClient({"Maintenance": rows})
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: client,
+        now_factory=lambda: datetime(2026, 6, 10, tzinfo=UTC),
+    )
+
+    results = await connector.context(
+        ContextRequest(
+            source_ref=(
+                "google_sheets:vehicle_log_primary:"
+                f"Maintenance!A{seed_row}:E{seed_row}"
+            ),
+            context_mode=CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+            field_name="Fuel (L)",
+            budget={"max_rows": 10, "max_bytes": 100000},
+        ),
+        source_config,
+    )
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.source_ref == (
+        "google_sheets:vehicle_log_primary:Maintenance!A2:E5"
+    )
+    assert result.content_type == "structured_field_values"
+    assert result.title == "Configured values for Fuel (L)"
+    assert result.text == "Retrieved 4 configured records for the requested field."
+    assert result.raw is None
+    assert result.available_context == []
+    assert result.structured_data is not None
+    assert result.structured_data.model_dump(mode="json") == {
+        "kind": "field_values",
+        "field_name": "Fuel (L)",
+        "record_count": 4,
+        "non_empty_value_count": 3,
+        "values": ["42.1", None, "38.7", "42.1"],
+    }
+    serialized = result.model_dump_json()
+    assert "PRIVATE-ROW" not in serialized
+    assert "north" not in serialized
+    assert "42.1" not in result.text
+    assert client.calls == [("sheet-id", "Maintenance")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field_name", "result_text"),
+    [
+        ("fuel (l)", {"include_fields": ["Fuel (L)"]}),
+        ("Fuel", {"include_fields": ["Fuel (L)"]}),
+        ("Category", {"include_fields": ["Fuel (L)"]}),
+        ("Fuel (L)", None),
+        ("Fuel (L)", {}),
+        ("Fuel (L)", {"include_fields": None}),
+        ("Fuel (L)", {"include_fields": ["Fuel (L)", 7]}),
+    ],
+    ids=[
+        "case-mismatch",
+        "partial-name",
+        "unconfigured-header",
+        "missing-result-text",
+        "missing-include-fields",
+        "null-include-fields",
+        "malformed-include-fields",
+    ],
+)
+async def test_configured_field_values_requires_exact_configured_field(
+    source_config_factory,
+    fake_sheet_values,
+    field_name: str,
+    result_text: object,
+) -> None:
+    source_config = source_config_factory(result_text=result_text)
+    client = FakeGoogleSheetsClient(fake_sheet_values)
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.context(
+            ContextRequest(
+                source_ref=(
+                    "google_sheets:vehicle_log_primary:Maintenance!A2:E2"
+                ),
+                context_mode=CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+                field_name=field_name,
+                budget={"max_rows": 10, "max_bytes": 100000},
+            ),
+            source_config,
+        )
+
+    assert error_info.value.code == "unsupported_operation"
+    assert error_info.value.details == {
+        "context_mode": CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+        "operation": "context",
+    }
+    assert client.calls == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("record_count", "configured_limit", "requested_limit", "succeeds"),
+    [
+        (5, 5, 10, True),
+        (6, 5, 10, False),
+        (6, 10, 5, False),
+        (251, 300, 300, False),
+    ],
+    ids=["exact-limit", "configured-limit", "request-limit", "absolute-limit"],
+)
+async def test_configured_field_values_enforces_complete_record_limits(
+    source_config_factory,
+    record_count: int,
+    configured_limit: int,
+    requested_limit: int,
+    succeeds: bool,
+) -> None:
+    rows = [["Task", "Fuel (L)"]] + [
+        [f"Record {index}", str(index)] for index in range(record_count)
+    ]
+    source_config = source_config_factory(
+        result_text={"include_fields": ["Task", "Fuel (L)"]},
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 1000000,
+            "max_text_chars": 40000,
+            "max_context_rows": configured_limit,
+            "allow_full_fetch": True,
+        },
+    )
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient({"Maintenance": rows}),
+    )
+    request = ContextRequest(
+        source_ref="google_sheets:vehicle_log_primary:Maintenance!A2:B2",
+        context_mode=CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+        field_name="Fuel (L)",
+        budget={"max_rows": requested_limit, "max_bytes": 1000000},
+    )
+
+    if succeeds:
+        results = await connector.context(request, source_config)
+        assert results[0].structured_data is not None
+        assert results[0].structured_data.record_count == record_count
+        return
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.context(request, source_config)
+    assert error_info.value.code == "result_too_large"
+    assert error_info.value.status_code == 413
+    assert error_info.value.details == {
+        "max_rows": min(configured_limit, requested_limit, 250)
+    }
+
+
+@pytest.mark.anyio
+async def test_configured_field_values_requires_full_fetch_permission(
+    source_config_factory,
+    fake_sheet_values,
+) -> None:
+    source_config = source_config_factory(
+        result_text={"include_fields": ["Task"]},
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "max_context_rows": 20,
+            "allow_full_fetch": False,
+        },
+    )
+    client = FakeGoogleSheetsClient(fake_sheet_values)
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.context(
+            ContextRequest(
+                source_ref=(
+                    "google_sheets:vehicle_log_primary:Maintenance!A2:E2"
+                ),
+                context_mode=CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+                field_name="Task",
+                budget={"max_rows": 20, "max_bytes": 100000},
+            ),
+            source_config,
+        )
+
+    assert error_info.value.code == "unsupported_operation"
+    assert client.calls == []
 
 
 @pytest.mark.anyio
