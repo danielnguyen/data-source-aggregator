@@ -119,6 +119,16 @@ PublicContentField = Annotated[
     Field(strict=True, min_length=1, max_length=120),
 ]
 
+ConfiguredFieldName = Annotated[
+    str,
+    Field(strict=True, min_length=1, max_length=120),
+]
+
+StructuredFieldValue = Annotated[
+    str,
+    Field(strict=True),
+]
+
 
 class MaterialScopeReferences(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -385,7 +395,30 @@ class FetchRequest(BaseModel):
 class ContextRequest(BaseModel):
     source_ref: str = Field(min_length=1)
     context_mode: str = Field(min_length=1)
+    field_name: ConfiguredFieldName | None = None
     budget: RetrievalBudget | None = None
+
+    @field_validator("field_name")
+    @classmethod
+    def validate_field_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if value != value.strip():
+            raise ValueError("field_name must not have leading or trailing whitespace.")
+        if re.search(r"[\x00-\x1f\x7f]", value):
+            raise ValueError("field_name must not contain control characters.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_field_name_context(self) -> "ContextRequest":
+        if self.context_mode == "configured_field_values":
+            if self.field_name is None:
+                raise ValueError(
+                    "field_name is required for configured_field_values context."
+                )
+        elif "field_name" in self.model_fields_set:
+            raise ValueError("field_name is not allowed for this context mode.")
+        return self
 
 
 class ContextPackRequest(BaseModel):
@@ -415,6 +448,37 @@ class AvailableContext(BaseModel):
     description: str = Field(min_length=1, max_length=500)
 
 
+class StructuredFieldValues(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    kind: Literal["field_values"]
+    field_name: ConfiguredFieldName
+    record_count: int = Field(ge=0, le=250)
+    non_empty_value_count: int = Field(ge=0, le=250)
+    values: list[StructuredFieldValue | None] = Field(max_length=250)
+
+    @field_validator("field_name")
+    @classmethod
+    def validate_field_name(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("field_name must not have leading or trailing whitespace.")
+        if re.search(r"[\x00-\x1f\x7f]", value):
+            raise ValueError("field_name must not contain control characters.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> "StructuredFieldValues":
+        if self.record_count != len(self.values):
+            raise ValueError("record_count must equal the number of values.")
+        if self.non_empty_value_count != sum(
+            value is not None for value in self.values
+        ):
+            raise ValueError(
+                "non_empty_value_count must equal the number of non-null values."
+            )
+        return self
+
+
 class ResultEnvelope(BaseModel):
     result_id: str
     source_type: str
@@ -430,6 +494,7 @@ class ResultEnvelope(BaseModel):
     url: str | None = None
     confidence: Confidence = Confidence.NONE
     raw: dict[str, object] | None = None
+    structured_data: StructuredFieldValues | None = None
     available_context: list[AvailableContext] = Field(default_factory=list, max_length=16)
     warnings: list[str] = Field(default_factory=list)
     record_date: date | None = Field(default=None, exclude=True)
@@ -454,6 +519,13 @@ class ResultEnvelope(BaseModel):
         if len(set(context_modes)) != len(context_modes):
             raise ValueError("Available context modes must be unique.")
         return value
+
+    @model_serializer(mode="wrap")
+    def omit_absent_structured_data(self, handler):
+        serialized = handler(self)
+        if self.structured_data is None:
+            serialized.pop("structured_data", None)
+        return serialized
 
 
 class RetrievalBudgetSummary(BaseModel):
