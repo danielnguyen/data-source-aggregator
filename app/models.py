@@ -393,10 +393,37 @@ class FetchRequest(BaseModel):
 
 
 class ContextRequest(BaseModel):
-    source_ref: str = Field(min_length=1)
+    source_ref: str | None = Field(default=None, min_length=1)
+    source_id: PublicSourceIdentifier | None = None
     context_mode: str = Field(min_length=1)
     field_name: ConfiguredFieldName | None = None
     budget: RetrievalBudget | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_locator_contract(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+
+        context_mode = value.get("context_mode")
+        source_ref_supplied = "source_ref" in value
+        source_id_supplied = "source_id" in value
+        if source_ref_supplied and value.get("source_ref") is None:
+            raise ValueError("source_ref must not be null when supplied.")
+        if source_id_supplied and value.get("source_id") is None:
+            raise ValueError("source_id must not be null when supplied.")
+
+        if context_mode == "configured_field_values":
+            if source_ref_supplied == source_id_supplied:
+                raise ValueError(
+                    "configured_field_values requires exactly one source locator."
+                )
+        else:
+            if not source_ref_supplied:
+                raise ValueError("source_ref is required for this context mode.")
+            if source_id_supplied:
+                raise ValueError("source_id is not allowed for this context mode.")
+        return value
 
     @field_validator("field_name")
     @classmethod
@@ -419,6 +446,15 @@ class ContextRequest(BaseModel):
         elif "field_name" in self.model_fields_set:
             raise ValueError("field_name is not allowed for this context mode.")
         return self
+
+    @model_serializer(mode="wrap")
+    def omit_absent_locator(self, handler):
+        serialized = handler(self)
+        if self.source_ref is None:
+            serialized.pop("source_ref", None)
+        if self.source_id is None:
+            serialized.pop("source_id", None)
+        return serialized
 
 
 class ContextPackRequest(BaseModel):

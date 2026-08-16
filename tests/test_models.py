@@ -103,12 +103,85 @@ def test_context_request_accepts_exact_configured_field_name() -> None:
     assert request.field_name == "Fuel (L)"
 
 
+def test_context_request_accepts_direct_configured_field_values_source() -> None:
+    request = ContextRequest(
+        source_id="configured_measurements",
+        context_mode="configured_field_values",
+        field_name="Fuel (L)",
+    )
+
+    assert request.source_id == "configured_measurements"
+    assert request.source_ref is None
+    assert "source_ref" not in request.model_dump(mode="json")
+
+
+@pytest.mark.parametrize(
+    "context_mode",
+    ["nearby_rows", "configured_worksheet", "upcoming_events"],
+)
+def test_context_request_preserves_source_ref_for_other_modes(
+    context_mode: str,
+) -> None:
+    request = ContextRequest(
+        source_ref="google_sheets:configured_measurements:Measurements!A2:D2",
+        context_mode=context_mode,
+    )
+
+    assert request.source_ref is not None
+    assert request.source_id is None
+    assert "source_id" not in request.model_dump(mode="json")
+
+
 @pytest.mark.parametrize(
     "payload",
     [
         {
             "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
             "context_mode": "configured_field_values",
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "source_id": "vehicle_log_primary",
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "source_ref": None,
+            "source_id": "vehicle_log_primary",
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
+            "source_id": None,
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "source_id": "vehicle_log_primary",
+            "context_mode": "configured_field_values",
+            "field_name": None,
+        },
+        {
+            "source_id": "invalid source",
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "source_id": "vehicle_log_primary",
+            "context_mode": "nearby_rows",
+        },
+        {
+            "source_id": "vehicle_log_primary",
+            "context_mode": "configured_worksheet",
+        },
+        {
+            "source_id": "vehicle_log_primary",
+            "context_mode": "upcoming_events",
         },
         {
             "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",

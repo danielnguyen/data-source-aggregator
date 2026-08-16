@@ -8,7 +8,9 @@ import httpx
 import pytest
 
 from app import registry as registry_module
+from app.connectors import google_sheets as google_sheets_module
 from app.connectors.google_sheets import GoogleSheetsClient, GoogleSheetsConnector
+from app.connectors.ics_calendar import IcsCalendarClient, IcsCalendarConnector
 from app.errors import ServiceError
 from app.main import create_app
 from app.models import (
@@ -85,6 +87,7 @@ def _write_field_values_source_config(
     *,
     allow_full_fetch: bool = True,
     max_context_rows: int = 250,
+    enabled: bool = True,
 ) -> None:
     (source_dir / "source.yaml").write_text(
         f"""
@@ -93,7 +96,7 @@ display_name: Configured Measurements
 description: Controlled configured measurements.
 domain_tags: [measurements]
 connector: google_sheets
-enabled: true
+enabled: {str(enabled).lower()}
 sensitivity: low
 access_mode: read_only
 connector_config:
@@ -1335,6 +1338,224 @@ async def test_configured_field_values_context_route_returns_private_bounded_pro
 
 
 @pytest.mark.anyio
+async def test_configured_field_values_context_route_supports_direct_exact_source(
+    tmp_path: Path,
+    monkeypatch,
+    configured_field_values_api_connector,
+) -> None:
+    connector, google_client = configured_field_values_api_connector
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_field_values_source_config(source_dir)
+
+    async def fail_search(*_args, **_kwargs):
+        raise AssertionError("Direct configured field values must not search.")
+
+    def fail_source_ref_parse(*_args, **_kwargs):
+        raise AssertionError("Direct configured field values must not parse source_ref.")
+
+    monkeypatch.setattr(connector, "search", fail_search)
+    monkeypatch.setattr(fetch_service, "parse_source_ref", fail_source_ref_parse)
+    monkeypatch.setattr(
+        google_sheets_module,
+        "parse_google_sheets_source_ref",
+        fail_source_ref_parse,
+    )
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/context",
+            headers={"X-Request-ID": "direct-field-values-request"},
+            json={
+                "source_id": "configured_measurements",
+                "context_mode": "configured_field_values",
+                "field_name": "Fuel (L)",
+                "budget": {
+                    "max_rows": 10,
+                    "max_bytes": 50000,
+                    "max_text_chars": 12000,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "direct-field-values-request"
+    payload = response.json()
+    assert payload["retrieval_mode"] == "context"
+    assert payload["answerable"] is True
+    assert payload["budget"]["truncated"] is False
+    assert len(payload["results"]) == 1
+    result = payload["results"][0]
+    assert result["source_id"] == "configured_measurements"
+    assert result["source_ref"] == (
+        "google_sheets:configured_measurements:Measurements!A2:D5"
+    )
+    assert result["content_type"] == "structured_field_values"
+    assert result["raw"] is None
+    assert result["available_context"] == []
+    assert result["structured_data"] == {
+        "kind": "field_values",
+        "field_name": "Fuel (L)",
+        "record_count": 4,
+        "non_empty_value_count": 3,
+        "values": ["42.1", None, "38.7", "41.0"],
+    }
+    assert google_client.calls == [
+        ("PRIVATE-SPREADSHEET-SENTINEL", "Measurements!A1:A1"),
+        ("PRIVATE-SPREADSHEET-SENTINEL", "Measurements"),
+    ]
+
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["operation"] == "context"
+    assert audit_event["source_ids"] == ["configured_measurements"]
+    assert audit_event["source_ref"] is None
+    assert audit_event["result_count"] == 1
+    assert audit_event["status"] == "success"
+    serialized_audit = json.dumps(audit_event)
+    for private_value in (
+        "Fuel (L)",
+        "42.1",
+        "38.7",
+        "41.0",
+        "UNRELATED-ROW-VALUE-SENTINEL",
+        "PRIVATE-SPREADSHEET-SENTINEL",
+    ):
+        assert private_value not in serialized_audit
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("source_id", "enabled"),
+    [("unknown_measurements", True), ("configured_measurements", False)],
+    ids=["unknown", "disabled"],
+)
+async def test_direct_configured_field_values_requires_visible_exact_source(
+    tmp_path: Path,
+    monkeypatch,
+    configured_field_values_api_connector,
+    source_id: str,
+    enabled: bool,
+) -> None:
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_field_values_source_config(source_dir, enabled=enabled)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/context",
+            json={
+                "source_id": source_id,
+                "context_mode": "configured_field_values",
+                "field_name": "Fuel (L)",
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "source_not_found"
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["operation"] == "context"
+    assert audit_event["source_ids"] == [source_id]
+    assert audit_event["source_ref"] is None
+    assert audit_event["status"] == "error"
+    assert audit_event["error_code"] == "source_not_found"
+
+
+@pytest.mark.anyio
+async def test_direct_configured_field_values_preserves_connector_unsupported_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class StaticIcsClient(IcsCalendarClient):
+        def get_text(self, url: str) -> str:
+            return "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Test//EN\nEND:VCALENDAR\n"
+
+    connector = IcsCalendarConnector(client_factory=lambda _: StaticIcsClient())
+    monkeypatch.setattr(
+        fetch_service.connector_base,
+        "get_connector",
+        lambda _: connector,
+    )
+    monkeypatch.setattr(registry_module, "get_connector", lambda _: connector)
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_ics_source_config(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/context",
+            json={
+                "source_id": "calendar_sports",
+                "context_mode": "configured_field_values",
+                "field_name": "Reading",
+            },
+        )
+
+    assert response.status_code == 501
+    assert response.json()["error"]["code"] == "unsupported_operation"
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["source_ids"] == ["calendar_sports"]
+    assert audit_event["source_ref"] is None
+    assert audit_event["error_code"] == "unsupported_operation"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field_name", "allow_full_fetch"),
+    [("Private Notes", True), ("Fuel (L)", False)],
+    ids=["field-not-configured", "full-fetch-disabled"],
+)
+async def test_direct_configured_field_values_enforces_source_configuration(
+    tmp_path: Path,
+    monkeypatch,
+    configured_field_values_api_connector,
+    field_name: str,
+    allow_full_fetch: bool,
+) -> None:
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_field_values_source_config(
+        source_dir,
+        allow_full_fetch=allow_full_fetch,
+    )
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/context",
+            json={
+                "source_id": "configured_measurements",
+                "context_mode": "configured_field_values",
+                "field_name": field_name,
+                "budget": {"max_rows": 10, "max_bytes": 50000},
+            },
+        )
+
+    assert response.status_code == 501
+    assert response.json()["error"]["code"] == "unsupported_operation"
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["source_ids"] == ["configured_measurements"]
+    assert audit_event["source_ref"] is None
+    assert audit_event["status"] == "error"
+    assert audit_event["error_code"] == "unsupported_operation"
+    serialized_audit = json.dumps(audit_event)
+    assert field_name not in serialized_audit
+    assert "PRIVATE-SPREADSHEET-SENTINEL" not in serialized_audit
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "request_json",
     [
@@ -1353,8 +1574,47 @@ async def test_configured_field_values_context_route_returns_private_bounded_pro
             "field_name": "Fuel (L)",
             "budget": {"max_rows": 10},
         },
+        {
+            "source_ref": (
+                "google_sheets:configured_measurements:Measurements!A2:D2"
+            ),
+            "source_id": "configured_measurements",
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "source_id": None,
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "source_ref": None,
+            "context_mode": "configured_field_values",
+            "field_name": "Fuel (L)",
+        },
+        {
+            "source_id": "configured_measurements",
+            "context_mode": "configured_worksheet",
+        },
+        {
+            "source_id": "configured_measurements",
+            "context_mode": "nearby_rows",
+        },
     ],
-    ids=["missing-field-name", "field-name-on-configured-worksheet"],
+    ids=[
+        "missing-field-name",
+        "field-name-on-configured-worksheet",
+        "both-locators",
+        "neither-locator",
+        "null-source-id",
+        "null-source-ref",
+        "source-id-on-configured-worksheet",
+        "source-id-on-nearby-rows",
+    ],
 )
 async def test_configured_field_values_route_rejects_invalid_request_contract(
     tmp_path: Path,
@@ -1495,9 +1755,7 @@ async def test_configured_field_values_route_rejects_partial_vectors(
         response = await client.post(
             "/v1/sources/context",
             json={
-                "source_ref": (
-                    "google_sheets:configured_measurements:Measurements!A2:D2"
-                ),
+                "source_id": "configured_measurements",
                 "context_mode": "configured_field_values",
                 "field_name": "Fuel (L)",
                 "budget": budget,

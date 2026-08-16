@@ -232,7 +232,27 @@ class GoogleSheetsConnector:
                 details={"context_mode": request.context_mode, "operation": "context"},
             )
 
-        parsed = self._validated_source_ref(request.source_ref, source_config)
+        parsed = None
+        if request.source_id is not None:
+            if (
+                request.context_mode != CONFIGURED_FIELD_VALUES_CONTEXT_MODE
+                or request.source_id != source_config.source_id
+            ):
+                raise ServiceError(
+                    "invalid_source_ref",
+                    "The provided source_id does not match the configured source.",
+                    status_code=400,
+                    details={"source_id": request.source_id},
+                )
+        else:
+            source_ref = request.source_ref
+            if source_ref is None:
+                raise ServiceError(
+                    "invalid_source_ref",
+                    "A source_ref is required for this context operation.",
+                    status_code=400,
+                )
+            parsed = self._validated_source_ref(source_ref, source_config)
         if request.context_mode in {
             CONFIGURED_WORKSHEET_CONTEXT_MODE,
             CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
@@ -251,6 +271,7 @@ class GoogleSheetsConnector:
                     },
                 )
             if request.context_mode == CONFIGURED_WORKSHEET_CONTEXT_MODE:
+                assert parsed is not None
                 return self._configured_worksheet_context(
                     request,
                     source_config,
@@ -259,9 +280,9 @@ class GoogleSheetsConnector:
             return self._configured_field_values_context(
                 request,
                 source_config,
-                parsed,
             )
 
+        assert parsed is not None
         return self._nearby_rows_context(request, source_config, parsed)
 
     def _validated_source_ref(
@@ -363,7 +384,6 @@ class GoogleSheetsConnector:
         self,
         request: ContextRequest,
         source_config: SourceConfig,
-        parsed: "ParsedGoogleSheetsSourceRef",
     ) -> list[ResultEnvelope]:
         field_name = request.field_name
         if field_name is None or field_name not in self._configured_result_fields(
@@ -395,7 +415,7 @@ class GoogleSheetsConnector:
                 details={"max_rows": row_limit},
             )
 
-        complete_range = self._complete_range(source_config, parsed, sheet_rows)
+        complete_range = self._complete_range(source_config, sheet_rows)
         values = [
             sheet_row.values_by_header.get(field_name) or None
             for sheet_row in sheet_rows
@@ -459,18 +479,18 @@ class GoogleSheetsConnector:
     def _complete_range(
         self,
         source_config: SourceConfig,
-        parsed: "ParsedGoogleSheetsSourceRef",
         sheet_rows: list[SheetRow],
     ) -> "ParsedGoogleSheetsSourceRef":
         first_row = sheet_rows[0]
         last_row = sheet_rows[-1]
+        worksheet = self._worksheet_name(source_config)
         worksheet_locator = (
-            f"{quote_worksheet_name(parsed.worksheet)}!"
+            f"{quote_worksheet_name(worksheet)}!"
             f"A{first_row.row_number}:{last_row.end_col}{last_row.row_number}"
         )
         return ParsedGoogleSheetsSourceRef(
             source_id=source_config.source_id,
-            worksheet=parsed.worksheet,
+            worksheet=worksheet,
             start_col="A",
             start_row=first_row.row_number,
             end_col=last_row.end_col,

@@ -645,6 +645,181 @@ async def test_configured_field_values_returns_complete_ordered_projection(
 
 
 @pytest.mark.anyio
+async def test_configured_field_values_supports_direct_exact_source_without_search(
+    source_config_factory,
+) -> None:
+    rows = [
+        ["Entry", "Reading"],
+        ["alpha", "10.125"],
+        ["beta", "20.25"],
+        ["gamma", ""],
+    ]
+    source_config = source_config_factory(
+        source_id="metrics_archive",
+        connector_config={
+            "spreadsheet_id": "sheet-id",
+            "worksheet": "Measurements",
+            "header_row": 1,
+            "credentials_ref": "google_sheets_readonly",
+        },
+        result_text={
+            "title_from": "Entry",
+            "include_fields": ["Entry", "Reading"],
+        },
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "max_context_rows": 10,
+            "allow_full_fetch": True,
+        },
+    )
+    client = FakeGoogleSheetsClient({"Measurements": rows})
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    results = await connector.context(
+        ContextRequest(
+            source_id="metrics_archive",
+            context_mode=CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+            field_name="Reading",
+            budget={"max_rows": 10, "max_bytes": 100000},
+        ),
+        source_config,
+    )
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.source_id == "metrics_archive"
+    assert result.source_ref == (
+        "google_sheets:metrics_archive:Measurements!A2:B4"
+    )
+    assert result.raw is None
+    assert result.available_context == []
+    assert result.structured_data is not None
+    assert result.structured_data.model_dump(mode="json") == {
+        "kind": "field_values",
+        "field_name": "Reading",
+        "record_count": 3,
+        "non_empty_value_count": 2,
+        "values": ["10.125", "20.25", None],
+    }
+    assert client.calls == [("sheet-id", "Measurements")]
+
+
+@pytest.mark.anyio
+async def test_direct_configured_field_values_rejects_source_config_mismatch(
+    source_config_factory,
+    fake_sheet_values,
+) -> None:
+    source_config = source_config_factory(source_id="source_b")
+    client = FakeGoogleSheetsClient(fake_sheet_values)
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.context(
+            ContextRequest(
+                source_id="source_a",
+                context_mode=CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+                field_name="Task",
+            ),
+            source_config,
+        )
+
+    assert error_info.value.code == "invalid_source_ref"
+    assert client.calls == []
+
+
+@pytest.mark.anyio
+async def test_direct_and_legacy_configured_field_values_are_equivalent(
+    source_config_factory,
+) -> None:
+    rows = [
+        ["Entry", "Reading"],
+        ["alpha", "10.125"],
+        ["beta", ""],
+    ]
+    source_config = source_config_factory(
+        source_id="metrics_archive",
+        connector_config={
+            "spreadsheet_id": "sheet-id",
+            "worksheet": "Measurements",
+            "header_row": 1,
+            "credentials_ref": "google_sheets_readonly",
+        },
+        result_text={"include_fields": ["Entry", "Reading"]},
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "max_context_rows": 10,
+            "allow_full_fetch": True,
+        },
+    )
+    client = FakeGoogleSheetsClient({"Measurements": rows})
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    direct = await connector.context(
+        ContextRequest(
+            source_id="metrics_archive",
+            context_mode=CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+            field_name="Reading",
+        ),
+        source_config,
+    )
+    legacy = await connector.context(
+        ContextRequest(
+            source_ref="google_sheets:metrics_archive:Measurements!A2:B2",
+            context_mode=CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+            field_name="Reading",
+        ),
+        source_config,
+    )
+
+    assert direct[0].source_id == legacy[0].source_id
+    assert direct[0].source_ref == legacy[0].source_ref
+    assert direct[0].content_type == legacy[0].content_type
+    assert direct[0].structured_data == legacy[0].structured_data
+    assert client.calls == [
+        ("sheet-id", "Measurements"),
+        ("sheet-id", "Measurements"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_direct_configured_field_values_preserves_empty_source_semantics(
+    source_config_factory,
+) -> None:
+    source_config = source_config_factory(
+        source_id="metrics_archive",
+        connector_config={
+            "spreadsheet_id": "sheet-id",
+            "worksheet": "Measurements",
+            "header_row": 1,
+            "credentials_ref": "google_sheets_readonly",
+        },
+        result_text={"include_fields": ["Entry", "Reading"]},
+    )
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FakeGoogleSheetsClient(
+            {"Measurements": [["Entry", "Reading"]]}
+        )
+    )
+
+    results = await connector.context(
+        ContextRequest(
+            source_id="metrics_archive",
+            context_mode=CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+            field_name="Reading",
+        ),
+        source_config,
+    )
+
+    assert results == []
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("field_name", "result_text"),
     [
@@ -733,7 +908,7 @@ async def test_configured_field_values_enforces_complete_record_limits(
         client_factory=lambda _: FakeGoogleSheetsClient({"Maintenance": rows}),
     )
     request = ContextRequest(
-        source_ref="google_sheets:vehicle_log_primary:Maintenance!A2:B2",
+        source_id="vehicle_log_primary",
         context_mode=CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
         field_name="Fuel (L)",
         budget={"max_rows": requested_limit, "max_bytes": 1000000},
