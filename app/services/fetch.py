@@ -76,12 +76,22 @@ async def run_context(
     audit_log_writer: AuditLogWriter,
 ) -> ContextResponse:
     try:
-        parsed_source_ref = parse_source_ref(request.source_ref)
-        source_config = _resolve_source(
-            source_registry,
-            parsed_source_ref.source_id,
-            parsed_source_ref.source_type,
-        )
+        if request.source_id is not None:
+            source_config = _resolve_direct_source(source_registry, request.source_id)
+        else:
+            source_ref = request.source_ref
+            if source_ref is None:
+                raise ServiceError(
+                    "invalid_source_ref",
+                    "A source_ref is required for this context operation.",
+                    status_code=400,
+                )
+            parsed_source_ref = parse_source_ref(source_ref)
+            source_config = _resolve_source(
+                source_registry,
+                parsed_source_ref.source_id,
+                parsed_source_ref.source_type,
+            )
         connector = connector_base.get_connector(source_config.connector)
         result_envelopes = await connector.context(request, source_config)
         bounded_results, budget_summary = enforce_budget(
@@ -93,7 +103,11 @@ async def run_context(
             audit_log_writer,
             operation="context",
             source_ref=request.source_ref,
-            source_ids=_failure_source_ids(request.source_ref),
+            source_ids=(
+                [request.source_id]
+                if request.source_id is not None
+                else _failure_source_ids(request.source_ref)
+            ),
             error=error,
         )
         raise
@@ -121,15 +135,7 @@ async def run_context(
 
 
 def _resolve_source(source_registry: SourceRegistry, source_id: str, source_type: str):
-    source_config = source_registry.get_source_config(source_id)
-    source_entry = source_registry.get_source(source_id)
-    if source_config is None or source_entry is None or not source_entry.enabled:
-        raise ServiceError(
-            "source_not_found",
-            f"Source '{source_id}' is not configured or is disabled.",
-            status_code=404,
-            details={"source_id": source_id},
-        )
+    source_config = _resolve_direct_source(source_registry, source_id)
     if source_config.connector != source_type:
         raise ServiceError(
             "invalid_source_ref",
@@ -140,11 +146,24 @@ def _resolve_source(source_registry: SourceRegistry, source_id: str, source_type
     return source_config
 
 
+def _resolve_direct_source(source_registry: SourceRegistry, source_id: str):
+    source_config = source_registry.get_source_config(source_id)
+    source_entry = source_registry.get_source(source_id)
+    if source_config is None or source_entry is None or not source_entry.enabled:
+        raise ServiceError(
+            "source_not_found",
+            f"Source '{source_id}' is not configured or is disabled.",
+            status_code=404,
+            details={"source_id": source_id},
+        )
+    return source_config
+
+
 def _write_failure_event(
     audit_log_writer: AuditLogWriter,
     *,
     operation: str,
-    source_ref: str,
+    source_ref: str | None,
     source_ids: list[str],
     error: ServiceError,
 ) -> None:
@@ -163,7 +182,9 @@ def _write_failure_event(
     )
 
 
-def _failure_source_ids(source_ref: str) -> list[str]:
+def _failure_source_ids(source_ref: str | None) -> list[str]:
+    if source_ref is None:
+        return []
     parts = source_ref.split(":", 2)
     if len(parts) >= 2 and parts[1]:
         return [parts[1]]
