@@ -10,13 +10,172 @@ from app.models import (
     AvailableContext,
     ContextPackItem,
     ContextRequest,
+    ErrorDetail,
+    ErrorResponse,
     MaterialScopeReferences,
     ResultEnvelope,
     RetrievalBudget,
+    SourceAccessDiagnostic,
     SourceConfig,
     StructuredFieldValues,
 )
 from app.services.budget import build_effective_budget, enforce_budget
+
+
+@pytest.mark.parametrize(
+    ("category", "upstream_status_code", "expected"),
+    [
+        (
+            "http_status",
+            503,
+            {
+                "component": "data-source-aggregator",
+                "stage": "source_access",
+                "category": "http_status",
+                "upstream_status_code": 503,
+            },
+        ),
+        (
+            "timeout",
+            None,
+            {
+                "component": "data-source-aggregator",
+                "stage": "source_access",
+                "category": "timeout",
+            },
+        ),
+        (
+            "dependency_failure",
+            None,
+            {
+                "component": "data-source-aggregator",
+                "stage": "source_access",
+                "category": "dependency_failure",
+            },
+        ),
+    ],
+)
+def test_source_access_diagnostic_accepts_only_coherent_bounded_values(
+    category: str,
+    upstream_status_code: int | None,
+    expected: dict[str, object],
+) -> None:
+    payload: dict[str, object] = {
+        "component": "data-source-aggregator",
+        "stage": "source_access",
+        "category": category,
+    }
+    if upstream_status_code is not None:
+        payload["upstream_status_code"] = upstream_status_code
+
+    diagnostic = SourceAccessDiagnostic.model_validate(payload)
+
+    assert diagnostic.model_dump(mode="json") == expected
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "component": "other-service",
+            "stage": "source_access",
+            "category": "dependency_failure",
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "other_stage",
+            "category": "dependency_failure",
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "temporary",
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "http_status",
+            "upstream_status_code": 99,
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "http_status",
+            "upstream_status_code": 600,
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "http_status",
+            "upstream_status_code": "503",
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "http_status",
+            "upstream_status_code": True,
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "http_status",
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "timeout",
+            "upstream_status_code": 504,
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "timeout",
+            "upstream_status_code": None,
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "dependency_failure",
+            "upstream_status_code": 502,
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "dependency_failure",
+            "upstream_status_code": None,
+        },
+        {
+            "component": "data-source-aggregator",
+            "stage": "source_access",
+            "category": "dependency_failure",
+            "unexpected": "field",
+        },
+    ],
+)
+def test_source_access_diagnostic_rejects_malformed_or_incoherent_values(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        SourceAccessDiagnostic.model_validate(payload)
+
+
+def test_error_response_remains_unchanged_when_diagnostic_is_absent() -> None:
+    response = ErrorResponse(
+        error=ErrorDetail(
+            code="source_not_found",
+            message="The configured source was not found.",
+            details={"source_id": "neutral_source"},
+        )
+    )
+
+    assert response.model_dump(mode="json") == {
+        "error": {
+            "code": "source_not_found",
+            "message": "The configured source was not found.",
+            "details": {"source_id": "neutral_source"},
+        }
+    }
+    assert "diagnostic" not in response.model_dump_json()
 
 
 @pytest.mark.parametrize(

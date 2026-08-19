@@ -670,10 +670,48 @@ class ContextPackResponse(BaseModel):
     diagnostics: ContextPackDiagnostics | None = None
 
 
+class SourceAccessDiagnostic(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    component: Literal["data-source-aggregator"]
+    stage: Literal["source_access"]
+    category: Literal["http_status", "timeout", "dependency_failure"]
+    upstream_status_code: Annotated[
+        int,
+        Field(strict=True, ge=100, le=599),
+    ] | None = None
+
+    @model_validator(mode="after")
+    def validate_status_category(self) -> "SourceAccessDiagnostic":
+        status_supplied = "upstream_status_code" in self.model_fields_set
+        if self.category == "http_status" and self.upstream_status_code is None:
+            raise ValueError("http_status requires upstream_status_code")
+        if self.category != "http_status" and status_supplied:
+            raise ValueError(
+                "upstream_status_code is only valid for http_status"
+            )
+        return self
+
+    @model_serializer(mode="wrap")
+    def omit_absent_status(self, handler):
+        serialized = handler(self)
+        if self.upstream_status_code is None:
+            serialized.pop("upstream_status_code", None)
+        return serialized
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str
     details: dict[str, object] = Field(default_factory=dict)
+    diagnostic: SourceAccessDiagnostic | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_absent_diagnostic(self, handler):
+        serialized = handler(self)
+        if self.diagnostic is None:
+            serialized.pop("diagnostic", None)
+        return serialized
 
 
 class ErrorResponse(BaseModel):
