@@ -1050,6 +1050,107 @@ async def test_fetch_route_returns_unsupported_operation_and_writes_audit(
 
 
 @pytest.mark.anyio
+async def test_fetch_source_access_failure_serializes_bounded_diagnostic_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    private_exception_sentinel = (
+        "PRIVATE-EXCEPTION-SENTINEL PRIVATE-RESPONSE-BODY-SENTINEL "
+        "https://private.invalid/source PRIVATE-CREDENTIAL-SENTINEL"
+    )
+
+    class StructuredUpstreamError(Exception):
+        def __init__(self) -> None:
+            super().__init__(private_exception_sentinel)
+            self.resp = type("Resp", (), {"status": 503})()
+
+    class FailingClient(GoogleSheetsClient):
+        def get_values(
+            self,
+            spreadsheet_id: str,
+            range_name: str,
+        ) -> list[list[str]]:
+            raise StructuredUpstreamError
+
+    connector = GoogleSheetsConnector(client_factory=lambda _: FailingClient())
+    monkeypatch.setattr(
+        fetch_service.connector_base,
+        "get_connector",
+        lambda _: connector,
+    )
+    monkeypatch.setattr(registry_module, "get_connector", lambda _: connector)
+
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(
+        tmp_path,
+        monkeypatch,
+        credential_path="PRIVATE-CREDENTIAL-CONFIG-SENTINEL",
+    )
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_source_config(source_dir)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/fetch",
+            json={
+                "source_ref": (
+                    "google_sheets:vehicle_log_primary:Maintenance!A44:H44"
+                ),
+                "include_raw": False,
+                "budget": {"max_bytes": 50000, "max_text_chars": 20000},
+            },
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error": {
+            "code": "source_unavailable",
+            "message": "The google_sheets source is currently unavailable.",
+            "details": {
+                "source_id": "vehicle_log_primary",
+                "connector": "google_sheets",
+            },
+            "diagnostic": {
+                "component": "data-source-aggregator",
+                "stage": "source_access",
+                "category": "http_status",
+                "upstream_status_code": 503,
+            },
+        }
+    }
+    serialized_response = response.text
+    for sentinel in (
+        "PRIVATE-EXCEPTION-SENTINEL",
+        "PRIVATE-RESPONSE-BODY-SENTINEL",
+        "private.invalid",
+        "PRIVATE-CREDENTIAL-SENTINEL",
+        "PRIVATE-CREDENTIAL-CONFIG-SENTINEL",
+        "sheet-secret-id",
+    ):
+        assert sentinel not in serialized_response
+    assert '"diagnostic":null' not in serialized_response
+
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["operation"] == "fetch"
+    assert audit_event["status"] == "error"
+    assert audit_event["error_code"] == "source_unavailable"
+    serialized_audit = json.dumps(audit_event)
+    assert "diagnostic" not in serialized_audit
+    for sentinel in (
+        "PRIVATE-EXCEPTION-SENTINEL",
+        "PRIVATE-RESPONSE-BODY-SENTINEL",
+        "private.invalid",
+        "PRIVATE-CREDENTIAL-SENTINEL",
+        "PRIVATE-CREDENTIAL-CONFIG-SENTINEL",
+        "sheet-secret-id",
+    ):
+        assert sentinel not in serialized_audit
+
+
+@pytest.mark.anyio
 async def test_fetch_route_rejects_invalid_source_ref(
     tmp_path: Path,
     monkeypatch,

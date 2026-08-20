@@ -10,7 +10,11 @@ from urllib.request import urlopen
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from app.errors import ServiceError
+from app.errors import (
+    ServiceError,
+    extract_structural_http_status,
+    observe_source_access_failure,
+)
 from app.models import (
     AvailableContext,
     CacheStatus,
@@ -207,6 +211,7 @@ class IcsCalendarConnector:
                 "The ics_calendar source is currently unavailable.",
                 status_code=502,
                 details={"source_id": source_config.source_id, "connector": self.connector_name},
+                diagnostic=observe_source_access_failure(exc),
             ) from exc
 
         try:
@@ -625,7 +630,7 @@ def _map_ics_health_service_error(error: ServiceError) -> str:
 
 
 def _map_ics_health_exception(error: Exception) -> str:
-    status_code = _extract_http_status_code(error)
+    status_code = extract_structural_http_status(error)
     if status_code in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}:
         return "permission_denied"
     if status_code is not None:
@@ -635,16 +640,3 @@ def _map_ics_health_exception(error: Exception) -> str:
     if "permission" in message or "forbidden" in message or "access denied" in message:
         return "permission_denied"
     return "source_unavailable"
-
-
-def _extract_http_status_code(error: Exception) -> int | None:
-    response = getattr(error, "resp", None)
-    status = getattr(response, "status", None)
-    if isinstance(status, int):
-        return status
-
-    status_code = getattr(error, "status_code", None)
-    if isinstance(status_code, int):
-        return status_code
-
-    return None

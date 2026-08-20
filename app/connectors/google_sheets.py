@@ -12,7 +12,11 @@ from app.credentials import (
     CredentialType,
     load_credential_registry,
 )
-from app.errors import ServiceError
+from app.errors import (
+    ServiceError,
+    extract_structural_http_status,
+    observe_source_access_failure,
+)
 from app.models import (
     AvailableContext,
     CacheStatus,
@@ -520,10 +524,24 @@ class GoogleSheetsConnector:
     def _load_sheet_rows(self, source_config: SourceConfig) -> list[SheetRow]:
         client = self._client_factory(source_config)
         worksheet = self._worksheet_name(source_config)
-        values = client.get_values(
-            self._spreadsheet_id(source_config),
-            quote_worksheet_name(worksheet),
-        )
+        try:
+            values = client.get_values(
+                self._spreadsheet_id(source_config),
+                quote_worksheet_name(worksheet),
+            )
+        except ServiceError:
+            raise
+        except Exception as exc:
+            raise ServiceError(
+                "source_unavailable",
+                "The google_sheets source is currently unavailable.",
+                status_code=502,
+                details={
+                    "source_id": source_config.source_id,
+                    "connector": self.connector_name,
+                },
+                diagnostic=observe_source_access_failure(exc),
+            ) from exc
         header_row = self._header_row(source_config)
         if len(values) < header_row:
             return []
@@ -938,7 +956,7 @@ def _map_google_health_service_error(error: ServiceError) -> str:
 
 
 def _map_google_health_exception(error: Exception) -> str:
-    status_code = _extract_http_status_code(error)
+    status_code = extract_structural_http_status(error)
     if status_code == HTTPStatus.UNAUTHORIZED:
         return "credentials_expired"
     if status_code == HTTPStatus.FORBIDDEN:
@@ -954,16 +972,3 @@ def _map_google_health_exception(error: Exception) -> str:
     if "credential" in message and ("missing" in message or "not found" in message):
         return "credentials_missing"
     return "source_unavailable"
-
-
-def _extract_http_status_code(error: Exception) -> int | None:
-    response = getattr(error, "resp", None)
-    status = getattr(response, "status", None)
-    if isinstance(status, int):
-        return status
-
-    status_code = getattr(error, "status_code", None)
-    if isinstance(status_code, int):
-        return status_code
-
-    return None

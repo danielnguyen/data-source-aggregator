@@ -84,6 +84,7 @@ def create_app(source_config_dir: Path | None = None) -> FastAPI:
                     code=error.code,
                     message=error.message,
                     details=error.details,
+                    diagnostic=error.diagnostic,
                 )
             ).model_dump(mode="json"),
         )

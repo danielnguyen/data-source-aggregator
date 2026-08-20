@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -172,6 +173,98 @@ async def test_google_sheets_health_returns_permission_denied_without_secret_lea
     assert health.last_error == "permission_denied"
     assert "sheet-id" not in health.model_dump_json()
     assert "/tmp/secret.json" not in health.model_dump_json()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("client_error", "expected_category", "expected_status"),
+    [
+        (
+            FakeGoogleHttpError(503, "PRIVATE-UPSTREAM-BODY-SENTINEL"),
+            "http_status",
+            503,
+        ),
+        (
+            TimeoutError("PRIVATE-TIMEOUT-SENTINEL"),
+            "timeout",
+            None,
+        ),
+        (
+            RuntimeError("PRIVATE-DEPENDENCY-SENTINEL"),
+            "dependency_failure",
+            None,
+        ),
+    ],
+    ids=["http-status", "timeout", "dependency-failure"],
+)
+async def test_source_access_failure_has_bounded_structural_diagnostic(
+    google_sheets_source_config,
+    client_error: Exception,
+    expected_category: str,
+    expected_status: int | None,
+) -> None:
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FailingGoogleSheetsClient(client_error)
+    )
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.search(
+            SearchRequest(query="neutral record", include_raw=False),
+            google_sheets_source_config,
+        )
+
+    error = error_info.value
+    assert error.code == "source_unavailable"
+    assert error.status_code == 502
+    assert error.message == "The google_sheets source is currently unavailable."
+    assert error.diagnostic is not None
+    expected_diagnostic = {
+        "component": "data-source-aggregator",
+        "stage": "source_access",
+        "category": expected_category,
+    }
+    if expected_status is not None:
+        expected_diagnostic["upstream_status_code"] = expected_status
+    assert error.diagnostic.model_dump(mode="json") == expected_diagnostic
+
+    serialized_error = json.dumps(
+        {
+            "code": error.code,
+            "message": error.message,
+            "details": error.details,
+            "diagnostic": error.diagnostic.model_dump(mode="json"),
+        }
+    )
+    for sentinel in (
+        "PRIVATE-UPSTREAM-BODY-SENTINEL",
+        "PRIVATE-TIMEOUT-SENTINEL",
+        "PRIVATE-DEPENDENCY-SENTINEL",
+    ):
+        assert sentinel not in serialized_error
+
+
+@pytest.mark.anyio
+async def test_source_access_service_error_passes_through_unchanged(
+    google_sheets_source_config,
+) -> None:
+    expected_error = ServiceError(
+        "invalid_request",
+        "A bounded connector validation failed.",
+        status_code=400,
+        details={"operation": "search"},
+    )
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: FailingGoogleSheetsClient(expected_error)
+    )
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.search(
+            SearchRequest(query="neutral record", include_raw=False),
+            google_sheets_source_config,
+        )
+
+    assert error_info.value is expected_error
+    assert error_info.value.diagnostic is None
 
 
 @pytest.mark.anyio
