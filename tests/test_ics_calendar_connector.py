@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.error import HTTPError
 
 import httpx
 import pytest
@@ -66,6 +67,23 @@ class FakeIcsHttpError(Exception):
     def __init__(self, status_code: int, message: str) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class GenericCodedError(Exception):
+    code = 503
+
+
+class GuardedHttpErrorBody:
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+        self.read_called = False
+
+    def read(self, *_args: object, **_kwargs: object) -> bytes:
+        self.read_called = True
+        return self.content
+
+    def close(self) -> None:
+        pass
 
 
 class FailingIcsCalendarClient(IcsCalendarClient):
@@ -287,6 +305,85 @@ async def test_ics_source_access_failure_has_bounded_structural_diagnostic(
         "private.invalid",
     ):
         assert sentinel not in serialized_error
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("upstream_status_code", [503, 403])
+async def test_ics_source_access_preserves_real_urllib_http_status_without_leaks(
+    ics_source_config,
+    upstream_status_code: int,
+) -> None:
+    response_body = GuardedHttpErrorBody(b"PRIVATE-HTTP-BODY-SENTINEL")
+    client_error = HTTPError(
+        "https://PRIVATE-HTTP-URL-SENTINEL.invalid/feed",
+        upstream_status_code,
+        "PRIVATE-HTTP-REASON-SENTINEL",
+        hdrs=None,
+        fp=response_body,
+    )
+    connector = IcsCalendarConnector(
+        client_factory=lambda _: FailingIcsCalendarClient(client_error),
+    )
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.search(
+            SearchRequest(query="neutral event", include_raw=False),
+            ics_source_config,
+        )
+
+    error = error_info.value
+    assert error.code == "source_unavailable"
+    assert error.status_code == 502
+    assert error.diagnostic is not None
+    assert error.diagnostic.model_dump(mode="json") == {
+        "component": "data-source-aggregator",
+        "stage": "source_access",
+        "category": "http_status",
+        "upstream_status_code": upstream_status_code,
+    }
+
+    serialized_error = json.dumps(
+        {
+            "code": error.code,
+            "message": error.message,
+            "details": error.details,
+            "diagnostic": error.diagnostic.model_dump(mode="json"),
+        }
+    )
+    for sentinel in (
+        "PRIVATE-HTTP-URL-SENTINEL",
+        "PRIVATE-HTTP-REASON-SENTINEL",
+        "PRIVATE-HTTP-BODY-SENTINEL",
+    ):
+        assert sentinel not in serialized_error
+    assert response_body.read_called is False
+
+
+@pytest.mark.anyio
+async def test_ics_source_access_does_not_treat_generic_code_as_http_status(
+    ics_source_config,
+) -> None:
+    connector = IcsCalendarConnector(
+        client_factory=lambda _: FailingIcsCalendarClient(
+            GenericCodedError("PRIVATE-GENERIC-CODE-SENTINEL")
+        ),
+    )
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.search(
+            SearchRequest(query="neutral event", include_raw=False),
+            ics_source_config,
+        )
+
+    error = error_info.value
+    assert error.code == "source_unavailable"
+    assert error.status_code == 502
+    assert error.diagnostic is not None
+    assert error.diagnostic.model_dump(mode="json") == {
+        "component": "data-source-aggregator",
+        "stage": "source_access",
+        "category": "dependency_failure",
+    }
 
 
 @pytest.mark.anyio
