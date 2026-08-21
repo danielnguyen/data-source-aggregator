@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.error import HTTPError
+
 from app.models import SourceAccessDiagnostic
 
 
@@ -36,6 +38,7 @@ def extract_structural_http_status(error: Exception) -> int | None:
     candidates = (
         getattr(response, "status", None),
         getattr(error, "status_code", None),
+        error.code if isinstance(error, HTTPError) else None,
     )
     for candidate in candidates:
         if (
