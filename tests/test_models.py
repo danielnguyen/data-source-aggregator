@@ -274,9 +274,20 @@ def test_context_request_accepts_direct_configured_field_values_source() -> None
     assert "source_ref" not in request.model_dump(mode="json")
 
 
+def test_context_request_accepts_direct_configured_worksheet_source() -> None:
+    request = ContextRequest(
+        source_id="configured_measurements",
+        context_mode="configured_worksheet",
+    )
+
+    assert request.source_id == "configured_measurements"
+    assert request.source_ref is None
+    assert "source_ref" not in request.model_dump(mode="json")
+
+
 @pytest.mark.parametrize(
     "context_mode",
-    ["nearby_rows", "configured_worksheet", "upcoming_events"],
+    ["nearby_rows", "upcoming_events"],
 )
 def test_context_request_preserves_source_ref_for_other_modes(
     context_mode: str,
@@ -335,7 +346,11 @@ def test_context_request_preserves_source_ref_for_other_modes(
             "context_mode": "nearby_rows",
         },
         {
+            "source_ref": "google_sheets:vehicle_log_primary:Maintenance!A2:E2",
             "source_id": "vehicle_log_primary",
+            "context_mode": "configured_worksheet",
+        },
+        {
             "context_mode": "configured_worksheet",
         },
         {

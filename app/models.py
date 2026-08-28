@@ -413,10 +413,10 @@ class ContextRequest(BaseModel):
         if source_id_supplied and value.get("source_id") is None:
             raise ValueError("source_id must not be null when supplied.")
 
-        if context_mode == "configured_field_values":
+        if context_mode in {"configured_field_values", "configured_worksheet"}:
             if source_ref_supplied == source_id_supplied:
                 raise ValueError(
-                    "configured_field_values requires exactly one source locator."
+                    f"{context_mode} requires exactly one source locator."
                 )
         else:
             if not source_ref_supplied:
