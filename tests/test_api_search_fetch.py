@@ -57,6 +57,42 @@ retrieval:
     )
 
 
+def _write_direct_worksheet_source_config(
+    source_dir: Path,
+    *,
+    enabled: bool = True,
+    allow_full_fetch: bool = True,
+) -> None:
+    (source_dir / "source.yaml").write_text(
+        f"""
+source_id: review_archive
+display_name: Review Archive
+description: Controlled review records.
+domain_tags: [reviews]
+connector: google_sheets
+enabled: {str(enabled).lower()}
+sensitivity: low
+access_mode: read_only
+connector_config:
+  spreadsheet_id: PRIVATE-REVIEW-SHEET
+  worksheet: Reviews
+  header_row: 1
+  credentials_ref: google_sheets_readonly
+retrieval:
+  default_mode: targeted
+  max_results: 20
+  max_bytes: 100000
+  max_text_chars: 40000
+  max_context_rows: 10
+  allow_full_fetch: {str(allow_full_fetch).lower()}
+result_text:
+  title_from: Entry
+  include_fields: [Entry, Status]
+""",
+        encoding="utf-8",
+    )
+
+
 def _write_ics_source_config(source_dir: Path) -> None:
     (source_dir / "calendar.yaml").write_text(
         """
@@ -809,6 +845,31 @@ def configured_worksheet_api_connector(monkeypatch):
 
 
 @pytest.fixture
+def direct_configured_worksheet_api_connector(monkeypatch):
+    rows = [
+        ["Entry", "Status", "Private Notes"],
+        ["Alpha", "ready", "PRIVATE-ROW-A"],
+        ["Beta", "pending", "PRIVATE-ROW-B"],
+        ["Gamma", "complete", "PRIVATE-ROW-C"],
+    ]
+    client = MultiSourceFakeGoogleSheetsClient(
+        {
+            "PRIVATE-REVIEW-SHEET": {
+                "Reviews": rows,
+                "Reviews!A1:A1": [rows[0]],
+            }
+        }
+    )
+    connector = GoogleSheetsConnector(
+        client_factory=lambda _: client,
+        now_factory=lambda: datetime(2026, 6, 10, tzinfo=UTC),
+    )
+    monkeypatch.setattr(fetch_service.connector_base, "get_connector", lambda _: connector)
+    monkeypatch.setattr(registry_module, "get_connector", lambda _: connector)
+    return connector, client
+
+
+@pytest.fixture
 def configured_field_values_api_connector(monkeypatch):
     rows = [
         ["Entry", "Date", "Fuel (L)", "Private Notes"],
@@ -1276,6 +1337,118 @@ async def test_configured_worksheet_context_route_returns_complete_raw_free_rang
 
 
 @pytest.mark.anyio
+async def test_configured_worksheet_context_route_supports_direct_source(
+    tmp_path: Path,
+    monkeypatch,
+    direct_configured_worksheet_api_connector,
+) -> None:
+    connector, google_client = direct_configured_worksheet_api_connector
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_direct_worksheet_source_config(source_dir)
+
+    async def fail_search(*_args, **_kwargs):
+        raise AssertionError("Direct configured worksheet context must not search.")
+
+    def fail_source_ref_parse(*_args, **_kwargs):
+        raise AssertionError("Direct configured worksheet context must not parse source_ref.")
+
+    monkeypatch.setattr(connector, "search", fail_search)
+    monkeypatch.setattr(fetch_service, "parse_source_ref", fail_source_ref_parse)
+    monkeypatch.setattr(
+        google_sheets_module,
+        "parse_google_sheets_source_ref",
+        fail_source_ref_parse,
+    )
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/context",
+            headers={"X-Request-ID": "direct-worksheet-request"},
+            json={
+                "source_id": "review_archive",
+                "context_mode": "configured_worksheet",
+                "budget": {
+                    "max_rows": 10,
+                    "max_bytes": 50000,
+                    "max_text_chars": 12000,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "direct-worksheet-request"
+    payload = response.json()
+    assert payload["answerable"] is True
+    assert payload["budget"]["truncated"] is False
+    assert len(payload["results"]) == 1
+    result = payload["results"][0]
+    assert result["source_id"] == "review_archive"
+    assert result["source_name"] == "Review Archive"
+    assert result["source_ref"] == "google_sheets:review_archive:Reviews!A2:C4"
+    assert result["content_type"] == "spreadsheet_range"
+    assert result["raw"] is None
+    assert all(value in result["text"] for value in ("Alpha", "Beta", "Gamma"))
+    assert "PRIVATE-ROW" not in json.dumps(payload)
+    assert google_client.calls == [
+        ("PRIVATE-REVIEW-SHEET", "Reviews!A1:A1"),
+        ("PRIVATE-REVIEW-SHEET", "Reviews"),
+    ]
+
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["operation"] == "context"
+    assert audit_event["source_ids"] == ["review_archive"]
+    assert audit_event["source_ref"] is None
+    assert audit_event["result_count"] == 1
+    assert audit_event["estimated_bytes"] == payload["budget"]["estimated_bytes"]
+    assert audit_event["status"] == "success"
+    assert "PRIVATE-REVIEW-SHEET" not in json.dumps(audit_event)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("source_id", "enabled"),
+    [("unknown_archive", True), ("review_archive", False)],
+    ids=["unknown", "disabled"],
+)
+async def test_direct_configured_worksheet_requires_visible_configured_source(
+    tmp_path: Path,
+    monkeypatch,
+    direct_configured_worksheet_api_connector,
+    source_id: str,
+    enabled: bool,
+) -> None:
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setenv("AUDIT_LOG_PATH", str(audit_path))
+    _write_credentials_config(tmp_path, monkeypatch)
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    _write_direct_worksheet_source_config(source_dir, enabled=enabled)
+
+    transport = httpx.ASGITransport(app=create_app(source_config_dir=source_dir))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/sources/context",
+            json={
+                "source_id": source_id,
+                "context_mode": "configured_worksheet",
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "source_not_found"
+    audit_event = json.loads(audit_path.read_text(encoding="utf-8").strip())
+    assert audit_event["operation"] == "context"
+    assert audit_event["source_ids"] == [source_id]
+    assert audit_event["source_ref"] is None
+    assert audit_event["status"] == "error"
+    assert audit_event["error_code"] == "source_not_found"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "budget",
     [
@@ -1698,7 +1871,13 @@ async def test_direct_configured_field_values_enforces_source_configuration(
             "field_name": "Fuel (L)",
         },
         {
+            "source_ref": (
+                "google_sheets:configured_measurements:Measurements!A2:D2"
+            ),
             "source_id": "configured_measurements",
+            "context_mode": "configured_worksheet",
+        },
+        {
             "context_mode": "configured_worksheet",
         },
         {
@@ -1713,7 +1892,8 @@ async def test_direct_configured_field_values_enforces_source_configuration(
         "neither-locator",
         "null-source-id",
         "null-source-ref",
-        "source-id-on-configured-worksheet",
+        "both-locators-on-configured-worksheet",
+        "neither-locator-on-configured-worksheet",
         "source-id-on-nearby-rows",
     ],
 )

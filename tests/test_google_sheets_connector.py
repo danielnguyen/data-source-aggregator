@@ -667,6 +667,103 @@ async def test_configured_worksheet_returns_the_same_complete_ordered_range(
 
 
 @pytest.mark.anyio
+async def test_configured_worksheet_supports_direct_source_without_seed_search(
+    source_config_factory,
+) -> None:
+    rows = [
+        ["Entry", "Status"],
+        ["alpha", "ready"],
+        ["beta", "pending"],
+        ["gamma", "complete"],
+    ]
+    source_config = source_config_factory(
+        source_id="review_archive",
+        display_name="Review Archive",
+        connector_config={
+            "spreadsheet_id": "sheet-id",
+            "worksheet": "Reviews",
+            "header_row": 1,
+            "credentials_ref": "google_sheets_readonly",
+        },
+        result_text={
+            "title_from": "Entry",
+            "include_fields": ["Entry", "Status"],
+        },
+        retrieval={
+            "default_mode": "targeted",
+            "max_results": 20,
+            "max_bytes": 100000,
+            "max_text_chars": 40000,
+            "max_context_rows": 10,
+            "allow_full_fetch": True,
+        },
+    )
+    client = FakeGoogleSheetsClient({"Reviews": rows})
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    direct = await connector.context(
+        ContextRequest(
+            source_id="review_archive",
+            context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+            budget={
+                "max_rows": 10,
+                "max_bytes": 100000,
+                "max_text_chars": 40000,
+            },
+        ),
+        source_config,
+    )
+    via_ref = await connector.context(
+        ContextRequest(
+            source_ref="google_sheets:review_archive:Reviews!A2:B2",
+            context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+            budget={
+                "max_rows": 10,
+                "max_bytes": 100000,
+                "max_text_chars": 40000,
+            },
+        ),
+        source_config,
+    )
+
+    assert len(direct) == 1
+    assert direct[0].source_id == "review_archive"
+    assert direct[0].source_name == "Review Archive"
+    assert direct[0].source_ref == "google_sheets:review_archive:Reviews!A2:B4"
+    assert direct[0].content_type == "spreadsheet_range"
+    assert direct[0].raw is None
+    assert all(value in direct[0].text for value in ("alpha", "beta", "gamma"))
+    assert direct[0].source_ref == via_ref[0].source_ref
+    assert direct[0].content_type == via_ref[0].content_type
+    assert direct[0].text == via_ref[0].text
+    assert client.calls == [
+        ("sheet-id", "Reviews"),
+        ("sheet-id", "Reviews"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_direct_configured_worksheet_rejects_source_config_mismatch(
+    google_sheets_source_config,
+    fake_sheet_values,
+) -> None:
+    client = FakeGoogleSheetsClient(fake_sheet_values)
+    connector = GoogleSheetsConnector(client_factory=lambda _: client)
+
+    with pytest.raises(ServiceError) as error_info:
+        await connector.context(
+            ContextRequest(
+                source_id="other_archive",
+                context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
+            ),
+            google_sheets_source_config,
+        )
+
+    assert error_info.value.code == "invalid_source_ref"
+    assert client.calls == []
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("seed_row", [2, 3, 5])
 async def test_configured_field_values_returns_complete_ordered_projection(
     source_config_factory,
@@ -1163,9 +1260,7 @@ async def test_configured_worksheet_fails_when_any_row_ceiling_is_too_small(
     with pytest.raises(ServiceError) as error_info:
         await connector.context(
             ContextRequest(
-                source_ref=(
-                    "google_sheets:vehicle_log_primary:Maintenance!A4:E4"
-                ),
+                source_id="vehicle_log_primary",
                 context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
                 budget={
                     "max_rows": requested_limit,
@@ -1209,10 +1304,7 @@ async def test_configured_worksheet_requires_full_fetch_permission(
     with pytest.raises(ServiceError) as error_info:
         await connector.context(
             ContextRequest(
-                source_ref=(
-                    "google_sheets:complete_authoritative_records:"
-                    "Maintenance!A2:E2"
-                ),
+                source_id="complete_authoritative_records",
                 context_mode=CONFIGURED_WORKSHEET_CONTEXT_MODE,
                 budget={"max_rows": 20, "max_bytes": 100000},
             ),

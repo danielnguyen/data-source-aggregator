@@ -239,7 +239,11 @@ class GoogleSheetsConnector:
         parsed = None
         if request.source_id is not None:
             if (
-                request.context_mode != CONFIGURED_FIELD_VALUES_CONTEXT_MODE
+                request.context_mode
+                not in {
+                    CONFIGURED_WORKSHEET_CONTEXT_MODE,
+                    CONFIGURED_FIELD_VALUES_CONTEXT_MODE,
+                }
                 or request.source_id != source_config.source_id
             ):
                 raise ServiceError(
@@ -275,11 +279,9 @@ class GoogleSheetsConnector:
                     },
                 )
             if request.context_mode == CONFIGURED_WORKSHEET_CONTEXT_MODE:
-                assert parsed is not None
                 return self._configured_worksheet_context(
                     request,
                     source_config,
-                    parsed,
                 )
             return self._configured_field_values_context(
                 request,
@@ -345,7 +347,6 @@ class GoogleSheetsConnector:
         self,
         request: ContextRequest,
         source_config: SourceConfig,
-        parsed: "ParsedGoogleSheetsSourceRef",
     ) -> list[ResultEnvelope]:
         sheet_rows = self._load_sheet_rows(source_config)
         if not sheet_rows:
@@ -360,21 +361,7 @@ class GoogleSheetsConnector:
                 details={"max_rows": row_limit},
             )
 
-        first_row = sheet_rows[0]
-        last_row = sheet_rows[-1]
-        worksheet_locator = (
-            f"{quote_worksheet_name(parsed.worksheet)}!"
-            f"A{first_row.row_number}:{last_row.end_col}{last_row.row_number}"
-        )
-        complete_range = ParsedGoogleSheetsSourceRef(
-            source_id=source_config.source_id,
-            worksheet=parsed.worksheet,
-            start_col="A",
-            start_row=first_row.row_number,
-            end_col=last_row.end_col,
-            end_row=last_row.row_number,
-            original_locator=worksheet_locator,
-        )
+        complete_range = self._complete_range(source_config, sheet_rows)
         return [
             self._build_range_result(
                 source_config,
